@@ -149,10 +149,10 @@ ablations `regression_<encoder>_single_frame.yml` and `stain_c-radio_single_fram
 the same four regression/stain/multitask leaves for the two controls, `*_vit-untrained.yml` (frozen) and
 `*_vit-scratch.yml` (trained from scratch).
 Results of the 27 runs are in `configs/cellcycle/README.md`: temporal integration doubles track-level correlation
-and lifts PIP-FUCCI phase accuracy from about 0.70 (always-G1 scores 0.69) to 0.86-0.88 for every pretrained
-encoder, while MorphEm's ViT-S without pretraining reaches 0.65 frozen and 0.79 trained from scratch (0.67 when
-trained through the staining loss alone, below the phase-only UNet's 0.76; 0.83 in the stain readout when trained
-through both losses). `submit.sh` queues each fit (requeued automatically when its allocation ends) and then its
+and lifts PIP-FUCCI phase accuracy from about 0.70 (always-G1 scores 0.69) to 0.82-0.88 for every pretrained
+encoder, while MorphEm's ViT-S without pretraining reaches 0.73 frozen and 0.80 trained from scratch (0.78 when
+trained through the staining loss alone, level with the phase-only UNet; 0.82 in the stain readout when trained
+through both losses). One run per configuration: a rerun on other GPU models moves single scores by up to 0.1. `submit.sh` queues each fit (requeued automatically when its allocation ends) and then its
 evaluation, which writes every frame's predictions and the scores of each best checkpoint on the validation and test
 splits to `runs/cellcycle/<leaf>/eval/`.
 
