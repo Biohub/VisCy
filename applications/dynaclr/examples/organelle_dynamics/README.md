@@ -1,27 +1,35 @@
 # Organelle dynamics: inference and analysis
 
-Run the organelle dynamics workflow on the paper data or your own microscopy data. Two skills connect image inference to infection-colored embedding plots and control-versus-treated population comparisons over hours post infection (HPI).
+Run the organelle dynamics workflow on the paper data or your own microscopy data. Separate inference, normalization, plotting and analysis skills connect image inference to infection-colored embedding plots and control-versus-treated population comparisons over hours post infection (HPI).
 
 ```text
 Images + cell coordinates + metadata + pretrained models
                          │
                  organelle-inference
                          │
-              Embeddings + classifier predictions
+          Raw embeddings + classifier predictions
                          │
-                  organelle-analysis
+                organelle-normalization
                          │
-             PCA/UMAP plots + MMD curves per HPI
+      Raw + own-control median/MAD normalized embeddings
+                         │
+                 organelle-plotting
+                         │
+                  PCA/UMAP plots
+
+Normalized embeddings → organelle-analysis → plots + MMD per HPI
 ```
 
-You can start at analysis if you already have compatible embeddings. Segmentation and tracking are upstream: per-frame cell coordinates suffice for inference and population analysis. Tracking is required only when explicitly selecting track/lineage sampling. Time alignment is planned as a separate skill.
+You can start at normalization if you already have compatible raw embeddings. Segmentation and tracking are upstream: per-frame cell coordinates suffice for inference and population analysis. Tracking is required only when explicitly selecting track/lineage sampling. Time alignment is planned as a separate skill.
 
 ## Skills and inputs
 
 | Skill | What it does | Required inputs | Main outputs |
 | --- | --- | --- | --- |
-| [organelle-inference](../../skills/organelle-inference/SKILL.md) | Extract embeddings from cell-centered image crops and optionally apply saved classifiers. | AI-ready OME-Zarr images with normalization metadata; cell-coordinate Parquet; experiment metadata; encoder checkpoint and SHA-256; the paper inference recipe (default), or a resolved training configuration for the explicit training recipe. For new infection/remodeling predictions, provide compatible classifier artifacts and hashes. | `predictions.zarr`, `predictions.parquet`, resolved configuration and provenance. |
-| [organelle-analysis](../../skills/organelle-analysis/SKILL.md) | Plot embeddings by treatment and available infection labels; compare all treated cells with matched controls per HPI. | AnnData embeddings; experiment/control/timing metadata; infection annotations or saved predictions for infection-colored plots. Classifier artifacts are needed only if generating new predictions. | PCA/UMAP coordinates and PNG/PDF plots; `mmd_curves.csv`, `mmd_samples.parquet`, MMD figures and provenance. |
+| [organelle-inference](../../skills/organelle-inference/SKILL.md) | Extract embeddings from cell-centered image crops and optionally apply saved classifiers. | AI-ready OME-Zarr images with normalization metadata; cell-coordinate Parquet; experiment metadata; encoder checkpoint and SHA-256; the paper inference recipe (default), or a resolved training configuration for the explicit training recipe. For new infection/remodeling predictions, provide compatible classifier artifacts and hashes. | `predictions.zarr` with raw encoder X; `embeddings.parquet` with raw vectors; `predictions.parquet` with labels/metadata; provenance. |
+| [organelle-normalization](../../skills/organelle-normalization/SKILL.md) | Fit time-matched control medians and control MAD separately per marker, experiment and control group. | Raw embeddings, canonical metadata and the dataset's own controls at two or more HPI values per group. | `normalized.zarr` preserving raw X and adding `obsm/X_control_mad`; raw and normalized vectors in `embeddings.parquet`; fitted parameters in `normalization.json`. |
+| [organelle-plotting](../../skills/organelle-plotting/SKILL.md) | Fit PCA80 → UMAP and plot treatment and available infection labels. | `normalized.zarr`, matching metadata and control label. | Per-marker coordinates, PCA/UMAP PNG/PDF plots and fitted models. |
+| [organelle-analysis](../../skills/organelle-analysis/SKILL.md) | Plot embeddings by treatment and available infection labels; compare all treated cells with matched controls per HPI. | Normalized AnnData embeddings; experiment/control/timing metadata; infection annotations or saved predictions for infection-colored plots. Classifier artifacts are needed only if generating new predictions. | PCA/UMAP coordinates and PNG/PDF plots; `mmd_curves.csv`, `mmd_samples.parquet`, MMD figures and provenance. |
 
 Treatment condition, annotated infection state, predicted infection state, and remodeling predictions remain separate fields. MMD uses **all treated cells**, independently of predicted infection state, and matches controls by experiment, control group and exact HPI.
 
@@ -53,12 +61,22 @@ Use a new output directory for every run. Point your agent at the linked `SKILL.
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow infer \
   --manifest inference.yaml --output results/inference
 
-# Embeddings and metadata → plots and MMD tables
+# Raw embeddings → control median/MAD normalized embeddings
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow normalize \
+  --manifest normalize.yaml --output results/normalized
+
+# Normalized embeddings → PCA/UMAP plots (without MMD)
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow plot \
+  --manifest analysis.yaml --output results/plots
+
+# Normalized embeddings → plots and MMD tables
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow analyze \
   --manifest analysis.yaml --output results/analysis
 ```
 
-For the second stage, set `embeddings` in `analysis.yaml` to the first stage's `predictions.zarr`. Remove the `classifiers` list if predictions already exist. Paths resolve relative to the manifest's `root`, so adjust that root when moving a bundle. The supplied template is for analysis; inference adds `cell_index`, `checkpoint`, and `checkpoint_sha256`. It defaults to `inference_recipe: paper`; `inference_recipe: training` additionally requires `training_config`. See the [contract](CONTRACT.md).
+For normalization, set `embeddings` in `normalize.yaml` to the inference output's `predictions.zarr`. For plotting and analysis, set it in `analysis.yaml` to `results/normalized/normalized.zarr`. Preserve the same metadata and control label. Remove the `classifiers` list if predictions already exist; classifiers always consume raw encoder X. Paths resolve relative to the manifest's `root`, so adjust that root when moving a bundle. The supplied template is for analysis; inference adds `cell_index`, `checkpoint`, and `checkpoint_sha256`. It defaults to `inference_recipe: paper`; `inference_recipe: training` additionally requires `training_config`. See the [contract](CONTRACT.md).
+
+Normalization preserves raw embeddings and exports two distinct Parquet vector columns: `embeddings` (raw) and `ctrl-norm-embedding` (normalized). It fits the current input cohort's controls independently for each marker/experiment/control group. The fit parameters, source checksum and normalized checksum are saved. Plotting rejects missing or stale normalization; rerun `normalize` after changing the cohort, controls or raw vectors. The combined `analyze` command also accepts raw input and saves its normalization before computing plots and MMD.
 
 Analysis defaults to control-normalized PCA retaining 80% variance for MMD, with a fixed bandwidth per marker. UMAP is used only for visualization. Optional `analysis.representation: raw` uses raw embeddings; `analysis.sampling_unit: track_id` or `lineage_id` requires genuine temporal identities and `fov_name`. Subsampling bands describe stability, not biological-replicate confidence intervals.
 
@@ -88,6 +106,7 @@ The workflow was checked against the archived paper data across SEC61B, TOMM20 a
 | Saved infection classifiers | 96/96 labels agree; maximum probability difference 0.0002074. |
 | Control normalization and cached PCA transforms | Exact agreement across 257,856 observations. |
 | Paper HPI MMD, uncertainty bands and permutation p-values | All 3,339 metric comparisons passed across 371 bins; maximum absolute difference 2.85e-14. |
+| Explicit normalize → plot/analyze sequence | 192 cells: exact raw-vector preservation, normalized Parquet/Zarr agreement, plotting coordinates, classifier predictions and previous MMD tables. |
 | Matched cohorts | Counts, dataset/HPI pairing and unique lineage membership checked for every reference bin. |
 
 See the [validation report and rerun commands](VALIDATION.md) for measured results, tolerances and machine-readable evidence. All generated comparison outputs are under `/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/publication-validation/`.

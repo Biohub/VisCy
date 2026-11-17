@@ -53,4 +53,27 @@ uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/verify_
 
 The inference and normalization verifiers use the dataset list in the original paper analysis script. Those source assets must be available at the recorded paths. `verify_paper.py` needs only the frozen reference bundle: curve table, matched-sample manifest, per-marker PCA scores and run parameters. It writes the comparison table, recomputed curve table, numerical report and overlay figure.
 
-Seven focused tests pass, including regression tests for the null standard deviation and paired subsampling. The updated population-analysis and external-metadata smoke runs also pass after these corrections.
+Sixteen focused tests pass, including regression tests for the null standard deviation and paired subsampling. The updated population-analysis and external-metadata smoke runs also pass after these corrections.
+
+
+## Explicit normalization and plotting steps
+
+The extracted normalizer was rechecked on all 257,856 paper observations: control-normalized vectors and archived fitted PCA transforms still agree exactly under the original numerical environment. The new `normalize → plot/analyze` sequence was also run on the 192-observation, 768-feature SEC61B smoke cohort. [Machine-readable results](validation/steps.json) record:
+
+- Raw encoder vectors preserved exactly in Zarr and Parquet.
+- `ctrl-norm-embedding` Parquet vectors exactly equal `obsm/X_control_mad` in Zarr.
+- Saved normalization reused unchanged by plotting and analysis.
+- Separate plotting and combined analysis produce identical PCA/UMAP coordinates.
+- Saved classifier predictions and all MMD curve columns exactly match the prior population analysis.
+
+Regression tests additionally check independent control fitting across markers, experiments and control groups; repeated normalization starting from raw X; rejection of changed cohorts/controls/vectors; and raw-feature classifier inputs. All four skill validators pass.
+
+Outputs are under `publication-validation/explicit-normalization-steps-final/`, including `normalized/normalization.json`, `normalized/embeddings.parquet`, `normalized/normalized.zarr`, and PCA/UMAP figures in `plots/`. Full-cohort recheck results are in `publication-validation/explicit-normalization-paper-final/normalization_comparison.json`.
+
+An initial run constrained BLAS to one thread and produced small PCA roundoff differences (maximum 1.91e-5 in cached scores; smoke bandwidth 1300.042724609376 versus 1300.042480468751). Control normalization itself remained exact. Restoring the original thread settings restored exact PCA and MMD agreement; comparison tolerances were not widened.
+
+```bash
+# Reference is a completed population-analysis bundle, containing resolved_manifest.yaml.
+uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/verify_steps.py \
+  --reference path/to/population-analysis --output results/verify-steps
+```

@@ -14,6 +14,16 @@ import pandas as pd
 import yaml
 from sklearn.decomposition import PCA
 
+from dynaclr.evaluation.organelle_normalization import (
+    CONTRACT_KEY,
+    export_embeddings,
+    normalize_embeddings,
+    require_normalized,
+)
+from dynaclr.evaluation.organelle_normalization import (
+    control_normalize as control_normalize,
+)
+
 
 def sha256(path):
     with open(path, "rb") as f:
@@ -174,38 +184,8 @@ def classify(data, m):
             data.obs.loc[mask, name] = probabilities[:, i]
 
 
-def control_normalize(x, obs, control):
-    """Paper control centering/MAD recipe, independently per acquisition group."""
-    from scipy.ndimage import gaussian_filter1d
-
-    x = np.asarray(x, dtype=np.float32).copy()
-    for _, group in obs.groupby(["experiment", "control_group"]):
-        rows = group.index.to_numpy()
-        times = group.hours_post_perturbation.to_numpy(float)
-        is_control = group.perturbation.eq(control).to_numpy()
-        grid = np.unique(times)
-        centers = np.full((len(grid), x.shape[1]), np.nan, dtype=np.float32)
-        for i, time in enumerate(grid):
-            take = is_control & (times == time)
-            if take.any():
-                centers[i] = np.median(x[rows[take]], axis=0)
-        occupied = np.flatnonzero(np.isfinite(centers[:, 0]))
-        if len(occupied) < 2:
-            raise ValueError("Control normalization requires controls at two HPI values per group")
-        for d in range(x.shape[1]):
-            centers[:, d] = np.interp(grid, grid[occupied], centers[occupied, d])
-        centers = gaussian_filter1d(centers, sigma=1.0, axis=0, mode="nearest")
-        x[rows] -= centers[np.searchsorted(grid, times)]
-        controls = x[rows[is_control]]
-        scale = 1.4826 * np.median(np.abs(controls - np.median(controls, axis=0)), axis=0)
-        positive = scale[scale > 0]
-        if not len(positive):
-            raise ValueError("Every control dimension has zero MAD")
-        x[rows] /= np.maximum(scale, np.quantile(positive, 0.01))
-    return x
-
-
-def analyze(data, m, output):
+def analyze(data, m, output, *, plot_only=False):
+    import joblib
     import matplotlib
 
     matplotlib.use("Agg")
@@ -227,42 +207,46 @@ def analyze(data, m, output):
     settings.update(m.get("analysis", {}))
     if settings["sampling_unit"] not in ("observation", "track_id", "lineage_id"):
         raise ValueError("Unsupported sampling_unit")
-    if (
+    if not plot_only and (
         settings["min_cells"] < 2
         or settings["max_cells"] < settings["min_cells"]
         or settings["permutations"] < 2
         or settings["repeats"] < 2
     ):
         raise ValueError("Invalid MMD sampling settings")
-    rng = np.random.default_rng(settings["seed"])
     results, samples = [], []
     control = m["control_label"]
+    normalized = require_normalized(data, m) if settings["representation"] == "control_pca80" else None
     for marker in sorted(data.obs.marker.unique()):
+        rng = np.random.default_rng(settings["seed"])
         idx = np.flatnonzero(data.obs.marker.eq(marker))
         obs = data.obs.iloc[idx].reset_index(drop=True)
         x = np.asarray(data.X[idx], dtype=float)
         if len(x) < 4 or not np.isfinite(x).all():
             raise ValueError("Need at least four finite embeddings per marker")
+        stem = hashlib.sha256(str(marker).encode()).hexdigest()[:12]
         if settings["representation"] == "control_pca80":
-            x = control_normalize(x, obs, control)
+            x = normalized[idx]
             fit_rows = []
             for _, group in obs.groupby(["experiment", "control_group", "perturbation"]):
                 fit_rows.extend(rng.choice(group.index, min(5000, len(group)), replace=False))
             pca = PCA(n_components=0.8, svd_solver="full").fit(x[fit_rows])
             x = pca.transform(x)
+            joblib.dump(pca, output / f"{stem}_pca80.joblib")
         elif settings["representation"] != "raw":
             raise ValueError("representation must be control_pca80 or raw")
         scores = PCA(n_components=min(2, x.shape[1], len(x)), svd_solver="full").fit_transform(x)
         if scores.shape[1] < 2:
             scores = np.column_stack([scores, np.zeros(len(x))])
-        umap = UMAP(
-            random_state=settings["seed"], n_neighbors=min(15, len(x) - 1), init="random", n_jobs=1
-        ).fit_transform(x)
+        umap_model = UMAP(random_state=settings["seed"], n_neighbors=min(15, len(x) - 1), init="random", n_jobs=1).fit(
+            x
+        )
+        umap = umap_model.embedding_
+        joblib.dump(umap_model, output / f"{stem}_umap.joblib")
         coords = obs.copy()
+        coords["observation_id"] = data.obs_names.to_numpy()[idx]
         coords[["pca_1", "pca_2"]] = scores
         coords[["umap_1", "umap_2"]] = umap
-        # Marker names are metadata, not filesystem paths.
-        stem = hashlib.sha256(str(marker).encode()).hexdigest()[:12]
         coords.to_parquet(output / f"{stem}_coordinates.parquet", index=False)
         for color in ["perturbation", "infection_state", "predicted_infection_state"]:
             if color not in obs:
@@ -278,6 +262,8 @@ def analyze(data, m, output):
                 for ext in ["png", "pdf"]:
                     fig.savefig(output / f"{stem}_{color}_{name}.{ext}", bbox_inches="tight")
                 plt.close(fig)
+        if plot_only:
+            continue
         bandwidth = median_heuristic(x, x)
         for key, group in obs.groupby(["experiment", "control_group", "hours_post_perturbation"], sort=True):
             for condition in sorted(set(group.perturbation) - {control}):
@@ -318,6 +304,8 @@ def analyze(data, m, output):
                 for label, indices in [("control", c), ("treated", t)]:
                     for i in indices:
                         samples.append(dict(row, group=label, cell_id=obs.iloc[i].cell_id))
+    if plot_only:
+        return settings
     table = pd.DataFrame(results)
     table.to_csv(output / "mmd_curves.csv", index=False)
     pd.DataFrame(samples).to_parquet(output / "mmd_samples.parquet", index=False)
@@ -342,6 +330,8 @@ def run(manifest, output, stage):
 
 
 def _run(manifest, output, stage):
+    if stage not in ("infer", "normalize", "plot", "analyze"):
+        raise ValueError(f"Unknown stage: {stage}")
     m = load_manifest(manifest)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -373,21 +363,38 @@ def _run(manifest, output, stage):
         data.X = data.X.toarray()
     if not np.isfinite(data.X).all():
         raise ValueError("Nonfinite embeddings")
+    existing_space = data.uns.get("organelle_feature_space")
+    if existing_space is not None and existing_space != m["feature_space"]:
+        raise ValueError("Embedding feature space mismatch")
     classify(data, m)
+    normalized = False
+    if stage == "normalize":
+        normalize_embeddings(data, m)
+        normalized = True
+    elif (
+        stage in ("analyze", "plot") and m.get("analysis", {}).get("representation", "control_pca80") == "control_pca80"
+    ):
+        # Backwards-compatible analyze entrypoint persists the same explicit step.
+        if stage == "analyze" and CONTRACT_KEY not in data.uns:
+            normalize_embeddings(data, m)
+        require_normalized(data, m)
+        normalized = True
+    export_embeddings(data, output, normalized=normalized)
     data.obs.to_parquet(output / "predictions.parquet")
     data.uns["organelle_feature_space"] = m["feature_space"]
     for column in data.obs:
         if isinstance(data.obs[column].dtype, (pd.StringDtype, pd.CategoricalDtype)):
             data.obs[column] = data.obs[column].astype(object)
     data.obs.index = pd.Index(data.obs.index.to_numpy(dtype=str), dtype=object)
-    data.write_zarr(output / "predictions.zarr", convert_strings_to_categoricals=False)
-    settings = analyze(data, m, output) if stage == "analyze" else {}
+    store = "normalized.zarr" if stage == "normalize" else "predictions.zarr"
+    data.write_zarr(output / store, convert_strings_to_categoricals=False)
+    settings = analyze(data, m, output, plot_only=stage == "plot") if stage in ("analyze", "plot") else {}
     provenance = dict(
         schema_version=1,
         manifest=m,
         analysis=settings,
         stage=stage,
-        representation=settings.get("representation", "encoder X"),
+        representation=settings.get("representation", "control_mad" if normalized else "encoder X"),
         cohort="all treated observations",
         sampling_unit=settings.get("sampling_unit", "observation"),
         interval="subsampling stability; not biological replicate confidence",
@@ -399,7 +406,7 @@ def _run(manifest, output, stage):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["infer", "analyze"])
+    parser.add_argument("stage", choices=["infer", "normalize", "plot", "analyze"])
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()

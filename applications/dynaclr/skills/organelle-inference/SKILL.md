@@ -13,4 +13,4 @@ Validate source-image correspondence on a small control/treated cohort before fu
 
 Use only trusted classifier joblib artifacts with explicit hashes and matching feature-space identities. The runner writes new outputs and refuses existing destinations. Report failures and absent classifier coverage; do not call treatment labels infection predictions. Classifier transfer to a new acquisition is not a validated biological label.
 
-The output predictions.zarr is the input to organelle-analysis. Keep the resolved configuration, provenance and source linkage with the bundle. Time alignment is a separate workflow requiring real temporal identities.
+Save raw embeddings: predictions.zarr keeps encoder X and embeddings.parquet exports the same vectors as embeddings. The output predictions.zarr is the input to organelle-normalization, followed by organelle-plotting or organelle-analysis. Keep the resolved configuration, provenance and source linkage with the bundle. Time alignment is a separate workflow requiring real temporal identities.
