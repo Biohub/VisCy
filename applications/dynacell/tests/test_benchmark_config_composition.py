@@ -622,6 +622,19 @@ def test_fnet2d_patch_vs_aug_arms_write_to_their_own_tree(model: str) -> None:
     assert arm["benchmark"]["model_name"] == model
 
 
+def test_fnet2d_vscyto2daug_seed1_differs_only_in_seed_and_names() -> None:
+    """The seed draw is the baseline recipe with seed_everything 1 and its own run tree."""
+    base = _load_fnet2d_nucleus("fnet2d_vscyto2daug")
+    seed1 = _load_fnet2d_nucleus("fnet2d_vscyto2daug_seed1")
+    assert seed1.pop("seed_everything") == 1
+    assert base.pop("seed_everything") == 0
+    names = ("fnet2d_vscyto2daug", "FNet2D_VSAug_iPSC_NUCL", "FNet2DVSAug_iPSC_NUCL")
+    text = yaml.safe_dump(base)
+    for name in names:
+        text = text.replace(name, name + "_seed1")
+    assert yaml.safe_load(text) == seed1
+
+
 _FNET2D_PREDICT_FILES = (
     "predict__ipsc_confocal.yml",
     "predict__a549_mantis_mock.yml",
@@ -1374,14 +1387,15 @@ _SPEED_FLAGS: dict[str, dict[str, bool]] = {
 
 
 # 2-D FNet leaves that opt into the flags, measured on an A40: 1.05x from the flags alone,
-# 2.47x with bf16-mixed (see the leaves' header comments).
+# 2.47x with bf16-mixed (see the leaves' header comments). Matched by prefix so the seed
+# draw and per-reconstruction variants (fnet2d_vscyto2daug_<name>) inherit them.
 _FLAGGED_2D_FNET_MODELS = ("fnet2d_bigpatch", "fnet2d_vscyto2daug")
 
 
 def _expected_speed_flags(cfg: dict) -> dict[str, bool]:
     """Return the flags a composed fit config must set: its 3-D family's, else none."""
     init_args = cfg["model"]["init_args"]
-    if cfg["benchmark"]["model_name"] in _FLAGGED_2D_FNET_MODELS:
+    if cfg["benchmark"]["model_name"].startswith(_FLAGGED_2D_FNET_MODELS):
         return _SPEED_FLAGS["FNet3D"]
     if init_args.get("architecture") not in _SPEED_FLAGS or init_args["model_config"]["in_stack_depth"] == 1:
         return {}

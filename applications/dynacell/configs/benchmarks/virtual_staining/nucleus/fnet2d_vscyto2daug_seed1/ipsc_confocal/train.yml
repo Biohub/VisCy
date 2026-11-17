@@ -1,0 +1,109 @@
+# Second draw (seed 1) of nucleus/fnet2d_vscyto2daug/ipsc_confocal/train.yml.
+# Recipe delta vs that leaf: seed_everything: 1. Gives the seed-to-seed spread
+# a phase-reconstruction variant has to exceed. Everything else, and the
+# rationale for it, is the baseline leaf's.
+#
+# FNet2D "same-augmentations" ablation (Arm B) on nucleus (Nuclei channel
+# of the iPSC in-focus slab store cell_focus.zarr). Identical to
+# nucleus/fnet2d_bigpatch/ipsc_confocal (Arm A) except the augmentation
+# stack: this leaf composes data_overlays/fnet2d_vscyto2daug_fit.yml (the
+# VSCyto2D augmentations, verbatim) with its 600x600 CPU crop that the GPU
+# affine + center crop take to 384x384. 2D counterpart of
+# nucleus/fnet3d_vscyto3daug/ipsc_confocal.
+# The data overlay keys norm/aug/val on Structure; the nucleus target_channel
+# is Nuclei, so this leaf list-replaces those three lists to re-key them,
+# keeping the overlay's crop sizes. Store and channels are declared inline
+# with the manifest resolver off, as in nucleus/fnet2d/ipsc_confocal.
+#
+# Built for fast iteration: speed flags (trainer.benchmark, channels_last)
+# plus bf16-mixed. Measured on an A40 (nucleus aug arm, steps 90-158):
+# 1.216 s/step without flags at 32-true, 1.162 with flags, 0.492 with flags
+# + bf16-mixed (2.47x), peak memory 27.9 -> 11.7 GB. MSE loss is immune to
+# the bf16-SSIM cancellation issue; the 3D pair (fnet3d_bigpatch /
+# fnet3d_vscyto3daug) also trains at bf16-mixed. Both 2D arms take the same
+# settings so they stay paired; they differ from the fnet2d baseline in
+# precision and flags as well as the patch.
+base:
+  - ../../../_internal/shared/model/train_sets/ipsc_confocal.yml
+  - ../../../_internal/shared/model/targets/nucleus.yml
+  - ../../../_internal/shared/model/data_overlays/fnet2d_vscyto2daug_fit.yml
+  - ../../../_internal/shared/model/model_overlays/fnet2d_fit.yml
+  - ../../../_internal/shared/model/launcher_profiles/mode_fit.yml
+  - ../../../_internal/shared/model/launcher_profiles/hardware_gpu_any_long.yml
+  - ../../../_internal/shared/model/launcher_profiles/runtime_shared.yml
+
+seed_everything: 1
+
+benchmark:
+  task: virtual_staining
+  organelle: nucleus
+  train_set: ipsc_confocal
+  model_name: fnet2d_vscyto2daug_seed1
+  experiment_id: nucleus__ipsc_confocal__fnet2d_vscyto2daug_seed1
+  # The 2D track reads the offline focus store, not the manifest-registered
+  # cell.zarr, so the resolver is off and the data fields are inline.
+  dataset_ref: null
+
+data:
+  init_args:
+    source_channel: Phase3D
+    target_channel: Nuclei
+    data_path: /hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/cell_focus.zarr
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Nuclei]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+    augmentations:
+      - class_path: viscy_transforms.RandWeightedCropd
+        init_args:
+          keys: [Phase3D, Nuclei]
+          w_key: Nuclei
+          spatial_size: [1, 600, 600]
+          num_samples: 4
+    val_augmentations:
+      - class_path: viscy_transforms.CenterSpatialCropd
+        init_args:
+          keys: [Phase3D, Nuclei]
+          roi_size: [1, 384, 384]
+
+model:
+  init_args:
+    channels_last: true
+
+trainer:
+  benchmark: true
+  precision: bf16-mixed
+  logger:
+    init_args:
+      name: FNet2D_VSAug_iPSC_NUCL_seed1
+      save_dir: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_seed1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: loss/validate
+        filename: "epoch={epoch}-step={step}-loss={loss/validate:.3f}"
+        auto_insert_metric_name: false
+        every_n_epochs: 1
+        save_top_k: 4
+        save_last: true
+        dirpath: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_seed1/checkpoints
+
+launcher:
+  job_name: FNet2DVSAug_iPSC_NUCL_seed1
+  run_root: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_seed1
+  # Same memory as the fnet2d leaf: the 5-plane focus store needs far less
+  # mmap_preload headroom than the full-Z cell.zarr.
+  sbatch:
+    mem: "128G"
