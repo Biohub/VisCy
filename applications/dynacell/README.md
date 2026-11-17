@@ -251,3 +251,4 @@ If you use DynaCell (code, data, or trained checkpoints), please cite
 - Up: [VisCy monorepo](../../README.md)
 - Subdirectories: [configs/](configs/README.md) · [src/](src/README.md) · [tools/](tools/README.md) ·
   [tests/](tests/README.md) · [examples/](examples/README.md)
+- Guides: [2D virtual staining tutorial](docs/2d-virtual-staining-tutorial.md) (new source channel → train → predict and score on DynaCell-lite)
