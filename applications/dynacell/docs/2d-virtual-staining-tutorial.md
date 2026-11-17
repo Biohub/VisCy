@@ -28,7 +28,11 @@ The running example is nucleus, trained on iPSC. The variant tag is `wo1`: one w
 | Tool to cut the 5-plane train slab | `applications/dynacell/tools/extract_focus_slab_store.py` |
 
 **The baseline recipe (`fnet2d_vscyto2daug`):**
-- **Model and input:** FNet run in 2D, one in-focus plane per sample, 384 × 384 patches.
+- **Model and input:** FNet run in 2D, one plane per sample, 384 × 384 patches.
+- **Which planes:**
+  - **Training** reads a 5-plane slab: the in-focus plane ±2, picked from `Phase3D`. With `z_window_size: 1`, each of the 5 planes is a separate training sample, so the model also sees slightly defocused planes.
+  - **Prediction** writes the 3-plane slab around the focus plane that the plane file names.
+  - **Scoring** uses one plane per FOV and timepoint: the focus plane picked from the ground-truth nuclei (`focus2d.halfwidth=1`). Pixel metrics and masks are computed on that plane; the slab is used only for deep features, which the fast tier skips.
 - **Augmentations:** the VSCyto2D training augmentations (affine, contrast, intensity, noise and blur), cropped from 600 × 600.
 - **Training:** batch 48, MSE loss, 200k steps, bf16-mixed, cuDNN benchmark and channels-last.
 - **Measured speed:** 0.308 s/step on an A100 and 0.505 s/step on an A40, so 200k steps take about 17 h and 28 h.
