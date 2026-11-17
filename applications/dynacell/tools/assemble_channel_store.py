@@ -17,6 +17,7 @@ Example (train side, one reconstruction, renamed so it never collides with Phase
 """
 
 import argparse
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -49,43 +50,42 @@ def assemble(
     if len(set(out_channels)) != len(out_channels):
         raise ValueError(f"output channel names must be unique, got {out_channels}")
     written = []
-    with open_ome_zarr(base, mode="r") as src:
-        others = [open_ome_zarr(store, mode="r") for store, _, _ in adds]
-        try:
-            with open_ome_zarr(output, layout="hcs", mode="w-", channel_names=out_channels, version="0.5") as dst:
-                plate_norm = src.zattrs.get("normalization", {})
-                dst.zattrs["normalization"] = {c: plate_norm[c] for c in keep if c in plate_norm}
-                keep_idx = [src.channel_names.index(c) for c in keep]
-                add_idx = [other.channel_names.index(ch) for other, (_, ch, _) in zip(others, adds)]
-                positions = list(src.positions())[:limit]
-                for name, pos in positions:
-                    arr = pos["0"]
-                    planes = [np.asarray(arr[:, i]) for i in keep_idx]
-                    for other, i, (store, _, _) in zip(others, add_idx, adds):
-                        other_arr = other[name]["0"]
-                        added = np.asarray(other_arr[:, i])
-                        expected = (arr.shape[0], *arr.shape[2:])
-                        if added.shape != expected:
-                            raise ValueError(
-                                f"{store}/{name}: (T, Z, Y, X) {added.shape} != base {expected}; "
-                                "reconstruct with the input's full Z (waveorder reconstruction_dimension: 3)"
-                            )
-                        planes.append(added.astype(arr.dtype, copy=False))
-                    row, col, fov = name.split("/")
-                    out = dst.create_position(row, col, fov)
-                    out.create_image(
-                        "0",
-                        np.stack(planes, axis=1),
-                        chunks=arr.chunks,
-                        transform=[TransformationMeta(type="scale", scale=list(pos.scale))],
+    with ExitStack() as stack:
+        src = stack.enter_context(open_ome_zarr(base, mode="r"))
+        others = [stack.enter_context(open_ome_zarr(store, mode="r")) for store, _, _ in adds]
+        dst = stack.enter_context(
+            open_ome_zarr(output, layout="hcs", mode="w-", channel_names=out_channels, version="0.5")
+        )
+        plate_norm = {c: v for c, v in src.zattrs.get("normalization", {}).items() if c in keep}
+        if plate_norm:
+            dst.zattrs["normalization"] = plate_norm
+        keep_idx = [src.channel_names.index(c) for c in keep]
+        add_idx = [other.channel_names.index(ch) for other, (_, ch, _) in zip(others, adds)]
+        for name, pos in list(src.positions())[:limit]:
+            arr = pos["0"]
+            planes = [np.asarray(arr[:, i]) for i in keep_idx]
+            for other, i, (store, _, _) in zip(others, add_idx, adds):
+                added = np.asarray(other[name]["0"][:, i])
+                expected = (arr.shape[0], *arr.shape[2:])
+                if added.shape != expected:
+                    raise ValueError(
+                        f"{store}/{name}: (T, Z, Y, X) {added.shape} != base {expected}; "
+                        "reconstruct with the input's full Z (waveorder reconstruction_dimension: 3)"
                     )
-                    pos_norm = pos.zattrs.get("normalization", {})
-                    out.zattrs["normalization"] = {c: pos_norm[c] for c in keep if c in pos_norm}
-                    written.append(name)
-                    print(f"{name} {tuple(out['0'].shape)}", flush=True)
-        finally:
-            for other in others:
-                other.close()
+                planes.append(added.astype(arr.dtype, copy=False))
+            row, col, fov = name.split("/")
+            out = dst.create_position(row, col, fov)
+            out.create_image(
+                "0",
+                np.stack(planes, axis=1),
+                chunks=(1, 1, *arr.chunks[2:]),
+                transform=[TransformationMeta(type="scale", scale=list(pos.scale))],
+            )
+            pos_norm = {c: v for c, v in pos.zattrs.get("normalization", {}).items() if c in keep}
+            if pos_norm:
+                out.zattrs["normalization"] = pos_norm
+            written.append(name)
+            print(f"{name} {tuple(out['0'].shape)}", flush=True)
     return written
 
 
