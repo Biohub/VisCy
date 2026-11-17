@@ -7,7 +7,7 @@ This tutorial walks through one loop of the 2D DynaCell workflow on the HPC:
 3. predict on the DynaCell-lite test set;
 4. score the predictions with the fast metric tier.
 
-Every command below was run once on an A40 node on 2026-11-17, unless it is marked **(not run)**. The run log is in `applications/dynacell/experiments/2026-11-17_tutorial-2d-check/RESULTS.md` on Alex's worktree (gitignored).
+Every command below was run once on an A40 node on 2026-11-17, unless it is marked **(not run)**. They were run as `uv run --no-sync ...` in an already-synced checkout; the `uv run` forms shown are the documented equivalents. The run log is `/hpc/mydata/alex.kalinin/VisCy-worktrees/fnet2d-vscyto2daug/applications/dynacell/experiments/2026-11-17_tutorial-2d-check/RESULTS.md` (not in git).
 
 The running example is nucleus, trained on iPSC. The variant tag is `wo1`: one waveorder reconstruction, stored as channel `PhaseWO1`. Use one tag per reconstruction.
 
@@ -84,15 +84,15 @@ uv run python applications/dynacell/tools/extract_focus_slab_store.py \
   --phase-channel Phase3D --halfwidth 2 --pixel-size 0.108
 ```
 
-**Checks on 8 FOVs, with a renamed copy of Phase3D as the new channel:**
-- The slab's `Phase3D` and `Nuclei` were bitwise identical to the production `cell_focus.zarr`.
+**Checks on 8 FOVs, running these three commands with `Phase3D` itself as the stand-in for a waveorder output:**
+- The slab's `Phase3D`, `Nuclei` and the new channel were bitwise identical to the production `cell_focus.zarr` (the new channel to its `Phase3D`).
 - The new channel's per-FOV statistics equalled the production `Phase3D` statistics.
+- Timing at 8 FOVs: assemble 8 s, statistics 28 s, slab extraction 8 s.
 
 **Notes:**
 - **Several reconstructions:** add them all at once (`--add a.zarr:Phase3D:PhaseWO1 --add b.zarr:Phase3D:PhaseWO2`) and list them all in `--channel_names`. Each new channel adds roughly 21 GB full-Z (for all 500 FOVs) and about 2.5 GB to the slab.
 - **Smoke test first:** `--limit 8` copies only 8 FOVs.
-- **Timing at 8 FOVs:** statistics took 100 s and the extraction 16 s.
-- **Not tested:** `assemble_channel_store.py` was run on a renamed copy of an existing channel, not on a real waveorder output.
+- **Not tested:** a real waveorder output. The checks used `Phase3D` itself as the stand-in.
 
 ### 2.3 Build test stores with the new channel
 
@@ -108,7 +108,7 @@ uv run viscy preprocess --data_path $L/ipsc/dataset_v4/test_cropped/cell_wo1.zar
 # A549 (out of domain): repeat for dual_nucl_memb_{mock,DENV,ZIKV}.zarr -> dual_nucl_memb_{mock,DENV,ZIKV}_wo1.zarr
 ```
 
-**Checks:** a store built this way, with `Phase3D` renamed, gave predictions bitwise identical to predicting from the registered store (max abs diff 0). Its recomputed statistics also equalled the registered ones.
+**Checks:** running these two commands with `Phase3D` as the stand-in (all 50 FOVs; assemble 10 s, statistics 28 s), then predicting from the new store, gave predictions bitwise identical to predicting from the registered store (max abs diff 0). Its recomputed statistics also equalled the registered ones.
 
 ## 3. Train
 
@@ -173,7 +173,7 @@ launcher:
 
 **What to change per variant:** the tag (`wo1`) everywhere, `source_channel`, `data_path` and the channel name in the three lists. The recipe (precision, speed flags, steps, augmentations) comes from the base config.
 
-**Checks:** this config composed, with bf16-mixed and both speed flags in effect. A 40-step fit from it trained and wrote checkpoints, and the repository's config tests passed with it in place.
+**Checks:** this config composed, with bf16-mixed and both speed flags in effect, and the repository's config tests passed with it in place. The 40-step test fit used a smoke copy of it (TensorBoard logger, 8 FOVs); it trained and wrote checkpoints.
 
 ### 3.2 Launch
 
@@ -247,20 +247,22 @@ launcher:
 - `predict_set` and `data_path` to `.../dynacell_lite/a549/mantis/test/dual_nucl_memb_<C>_wo1.zarr`.
 - `predict_z_planes` to `.../focus2d_planes/nucleus/a549__<c>__h1.json`, with the output under `.../ipsc/a549__<c>/`.
 
-The baseline's A549 lite predict configs show the layout.
+The baseline's A549 lite predict configs show the layout. An A549 predict from a new channel is **(not run)**; the A549 path itself was run with the baseline `Phase3D` configs.
 
 ### 4.2 Run the predict
 
 ```sh
 P=applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet2d_vscyto2daug_wo1/ipsc_confocal/predict__ipsc_confocal_lite.yml
 # a) through sbatch
-uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best --dry-run
-uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best
+uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best --override launcher.sbatch.constraint=a40 --dry-run
+uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best --override launcher.sbatch.constraint=a40
 # b) directly, inside a GPU allocation (what was tested; each predict takes ~1 min)
-uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best --print-resolved-config > /tmp/$USER-wo1-pred.yml
-uv run dynacell predict -c /tmp/$USER-wo1-pred.yml
+mkdir -p ~/dynacell-resolved
+uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best --print-resolved-config > ~/dynacell-resolved/wo1-pred-ipsc.yml
+uv run dynacell predict -c ~/dynacell-resolved/wo1-pred-ipsc.yml
 ```
 
+- **GPU type:** `--override launcher.sbatch.constraint=a40` pins the GPU type (checked with `--print-script`). Use the same type for every predict you compare (§6); route (b) does this by running everything in one allocation.
 - **Checkpoint:** `--ckpt best` replaces the pinned `last.ckpt` with the checkpoint that had the best validation loss. `--ckpt last` and `--ckpt <path>` also work.
 - **Other settings:** predict runs at fp32 and needs neither bf16 nor channels-last.
 - **Planes predicted:** only the 3 in-focus planes per FOV and timepoint are predicted. The others stay 0 in the store.
@@ -273,7 +275,8 @@ uv run dynacell predict -c /tmp/$USER-wo1-pred.yml
 for m in fnet2d_vscyto2daug fnet2d_vscyto2daug_seed1; do
   for t in ipsc_confocal a549_mantis_h2b_mock a549_mantis_h2b_denv a549_mantis_h2b_zikv; do
     uv run python applications/dynacell/tools/submit_benchmark_job.py \
-      applications/dynacell/configs/benchmarks/virtual_staining/nucleus/$m/ipsc_confocal/predict__${t}_lite.yml --ckpt best
+      applications/dynacell/configs/benchmarks/virtual_staining/nucleus/$m/ipsc_confocal/predict__${t}_lite.yml \
+      --ckpt best --override launcher.sbatch.constraint=a40
   done
 done
 ```
@@ -332,7 +335,18 @@ The command was run with `uv run --no-sync` in an already-synced environment. Th
   - `FRC_Resolution` (µm, lower is better) for resolved detail;
   - `Dice` and `mAP` in `mask_metrics.csv` for nucleus shape and instances.
 
-## 7. Gotchas
+## 7. A new dataset or a new target channel (not run end to end)
+
+The steps above reuse the DynaCell test sets, whose plane files, lite subsets and ground-truth caches already exist. For a dataset of your own:
+
+- **Training** needs no manifest. Point a variant config's `data_path`, `source_channel` and `target_channel` at your store, re-key the three channel lists as in §3.1, and run `viscy preprocess` for both channels. A 3D store needs a 5-plane slab from `extract_focus_slab_store.py` (pass `--pixel-size`); a store that is already single-plane (Z=1) should work directly, since the 2D configs read one plane per sample (not run).
+- **Predict** on a 3D test store needs a plane file. `dynacell precompute-gt ... build.focus_planes=<file>` writes one and needs a ground-truth nucleus channel. Here it was run through a registered dataset (`+benchmark.dataset_ref...`); registering yours means a manifest under `DYNACELL_MANIFEST_ROOTS`, and passing `io.gt_path` directly instead is untested. Without a plane file, set `predict_z_planes: null` to predict every plane (slower, but the eval accepts it).
+- **Eval** on your own stores: pass `io.gt_path`, `io.gt_channel_name`, `io.pred_path`, `io.pred_channel_name`, `pixel_metrics.spacing` and `save.save_dir` instead of `+benchmark.dataset_ref...`. Two measured constraints (2026-11-16, synthetic stores; log in Alex's `experiments/2026-11-16_2d-native-z1-pixel-metrics/RESULTS.md`):
+  - single-plane (Z=1) stores must be scored with `focus2d.halfwidth=0` plus the cpdino 2D segmentation flags (`compute_instance_ap=true segmentation.backend=cpdino segmentation.dimension=2d segmentation.slice_selection=focus segmentation.focus_slab_halfwidth=0`); without focus2d the eval crashes in SSIM;
+  - the eval always segments the target, and only nucleus and membrane have a 2D segmenter.
+- **For PSNR and FRC alone** on 2D arrays, `dynacell.evaluation.metrics.compute_pixel_metrics(pred, gt, spacing, fsc_kwargs={"bin_delta": 5}, ...)` returns `PSNR`, `SI_PSNR` and `FRC_Resolution` with no segmentation.
+
+## 8. Gotchas
 
 - **Never run `--overwrite` on, or write into, a registered store** (`cell.zarr`, `cell_focus.zarr` or any lite test store). Benchmark evals and running fits read them. Always assemble a new, tagged store.
 - **Missing statistics fail loudly:** predict and fit raise `KeyError`. Stale statistics fail silently, so re-run `viscy preprocess` after rewriting a channel.
@@ -342,9 +356,10 @@ The command was run with `uv run --no-sync` in an already-synced environment. Th
 - **Logger swap fails:** swapping in a TensorBoard logger through a config fails with `Option 'project' is not accepted`, because the base config's wandb key cannot be removed by a merge. Keep wandb.
 - **Stray files:** `dynacell` writes `config.yaml`, `pipeline.log`, `precompute_cli.log` and `cufile.log` into the current directory.
 
-## 8. Not covered yet
+## 9. Not covered yet
 
-- Running waveorder, and assembling a real waveorder output. The tool was tested on a renamed copy of an existing channel.
+- Running waveorder, and assembling a real waveorder output. The tool was run with `Phase3D` itself standing in for the reconstruction.
+- A new dataset or target end to end (§7).
 - Submitting a variant fit or predict through sbatch. Only the baseline fits were submitted that way; predicts and evals were run directly on a GPU node.
 - The full metric tier (deep features, CP features, KID). On lite it needs a CP reference that includes the lite datasets, which does not exist yet.
 - A549-trained or joint 2D baselines.
