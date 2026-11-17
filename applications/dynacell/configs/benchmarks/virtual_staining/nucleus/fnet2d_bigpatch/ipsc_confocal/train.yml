@@ -10,10 +10,14 @@
 # keeping the overlay's crop sizes. Store and channels are declared inline
 # with the manifest resolver off, as in nucleus/fnet2d/ipsc_confocal.
 #
-# No speed flags (trainer.benchmark / channels_last): they were measured on
-# 3D fits only, the 2D FNet leaves take neither (pinned by
-# test_3d_fcmae_and_fnet3d_fits_take_the_measured_speed_flags), and leaving
-# them off keeps the fnet2d baseline comparable.
+# Built for fast iteration: speed flags (trainer.benchmark, channels_last)
+# plus bf16-mixed. Measured on an A40 (nucleus aug arm, steps 90-158):
+# 1.216 s/step without flags at 32-true, 1.162 with flags, 0.492 with flags
+# + bf16-mixed (2.47x), peak memory 27.9 -> 11.7 GB. MSE loss is immune to
+# the bf16-SSIM cancellation issue; the 3D pair (fnet3d_bigpatch /
+# fnet3d_vscyto3daug) also trains at bf16-mixed. Both 2D arms take the same
+# settings so they stay paired; they differ from the fnet2d baseline in
+# precision and flags as well as the patch.
 base:
   - ../../../_internal/shared/model/train_sets/ipsc_confocal.yml
   - ../../../_internal/shared/model/targets/nucleus.yml
@@ -64,7 +68,13 @@ data:
           keys: [Phase3D, Nuclei]
           roi_size: [1, 384, 384]
 
+model:
+  init_args:
+    channels_last: true
+
 trainer:
+  benchmark: true
+  precision: bf16-mixed
   logger:
     init_args:
       name: FNet2D_BigPatch_iPSC_NUCL

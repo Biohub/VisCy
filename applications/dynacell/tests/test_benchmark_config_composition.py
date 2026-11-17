@@ -595,10 +595,15 @@ def test_fnet2d_patch_vs_aug_arms_differ_only_where_intended() -> None:
     # Same store, channels and normalization as the fnet2d baseline.
     for key in ("data_path", "source_channel", "target_channel", "normalizations"):
         assert big_ia[key] == base_ia[key], key
-    # Model and trainer settings are fnet2d's in both arms.
+    # Model and trainer settings: fnet2d's, plus the speed flags and bf16-mixed, same in both arms.
+    assert big["model"] == aug["model"]
+    model = copy.deepcopy(big["model"])
+    assert model["init_args"].pop("channels_last") is True
+    assert model == base["model"]
     for arm in (big, aug):
-        assert arm["model"] == base["model"]
-        for key in ("precision", "max_steps", "max_epochs", "devices", "strategy", "benchmark"):
+        assert arm["trainer"]["precision"] == "bf16-mixed"
+        assert arm["trainer"]["benchmark"] is True
+        for key in ("max_steps", "max_epochs", "devices", "strategy"):
             assert arm["trainer"].get(key) == base["trainer"].get(key), key
 
 
@@ -1368,9 +1373,16 @@ _SPEED_FLAGS: dict[str, dict[str, bool]] = {
 }
 
 
+# 2-D FNet leaves that opt into the flags, measured on an A40: 1.05x from the flags alone,
+# 2.47x with bf16-mixed (see the leaves' header comments).
+_FLAGGED_2D_FNET_MODELS = ("fnet2d_bigpatch", "fnet2d_vscyto2daug")
+
+
 def _expected_speed_flags(cfg: dict) -> dict[str, bool]:
     """Return the flags a composed fit config must set: its 3-D family's, else none."""
     init_args = cfg["model"]["init_args"]
+    if cfg["benchmark"]["model_name"] in _FLAGGED_2D_FNET_MODELS:
+        return _SPEED_FLAGS["FNet3D"]
     if init_args.get("architecture") not in _SPEED_FLAGS or init_args["model_config"]["in_stack_depth"] == 1:
         return {}
     return _SPEED_FLAGS[init_args["architecture"]]

@@ -6,7 +6,7 @@
 # fcmae_vscyto2d_fit.yml (the 600x600 weighted crop plus BatchedRandAffined /
 # BatchedCenterSpatialCropd to 384 / AdjustContrast / ScaleIntensity /
 # GaussianNoise / GaussianSmooth), onto an otherwise-unchanged FNet2D fit.
-# Model, optimizer, loss, schedule, max_steps, precision and the mean/std
+# Model, optimizer, loss, schedule, max_steps and the mean/std
 # normalization come from model_overlays/fnet2d_fit.yml and fnet2d_fit.yml.
 #
 # Paired with fnet2d_bigpatch_fit.yml (same store, batch, num_samples,
