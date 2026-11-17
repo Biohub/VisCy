@@ -13,4 +13,4 @@ Use all treated observations regardless of classifier predictions. Match control
 
 PCA and seeded UMAP are visualizations; MMD uses control-normalized PCA80 features by default, never UMAP; representation: raw selects encoder X. The default cohort contains all treated cells, unlike the paper onset-selected cohort. Label subsampling bands as stability intervals, not biological replicate confidence intervals. For tracked data set sampling_unit: lineage_id (or track_id); require real fov_name and temporal identities.
 
-For paper reproduction, consult the paper provenance and original analyze_direct_pal_aligned_organelle_mmd.py script. Do not compare numeric curves across different cohorts or claim the portable preset reproduces the paper. Alignment is outside this skill.
+For numerical paper reproduction, use the verified frozen-cohort commands in [VALIDATION.md](../../examples/organelle_dynamics/VALIDATION.md). They recompute the archived HPI curves with the same estimator used by this skill. Keep cohort selection, PCA fit, bandwidth and seeds fixed for that comparison. Alignment is outside this skill.

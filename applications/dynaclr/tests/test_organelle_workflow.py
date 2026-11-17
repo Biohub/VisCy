@@ -63,3 +63,32 @@ def test_classifier_mismatch_rejected_before_loading():
             ad.AnnData(np.zeros((2, 2))),
             {"feature_space": "a", "classifiers": [{"feature_space": "b", "path": "missing.joblib"}]},
         )
+
+
+def test_paper_mmd_uses_sample_null_scale_and_paired_subsampling(monkeypatch):
+    from dynaclr.evaluation.organelle_mmd import summarize_mmd_pairs
+    from viscy_utils.evaluation import mmd
+
+    perturbed = np.arange(16, dtype=float).reshape(8, 2)
+    control = perturbed + 100
+    monkeypatch.setattr(mmd, "mmd_permutation_test", lambda *a, **k: (2.0, 0.1, np.array([-1.0, 0.0, 1.0])))
+    calls = []
+
+    def paired_statistic(t, c, **kwargs):
+        np.testing.assert_array_equal(c - t, np.full_like(t, 100))
+        calls.append(len(t))
+        return 2.0
+
+    monkeypatch.setattr(mmd, "compute_mmd_unbiased", paired_statistic)
+    result = summarize_mmd_pairs(perturbed, control, bandwidth=1.0, repeats=5)
+    assert result["null_std"] == 1.0
+    assert result["standardized_mmd2"] == 2.0
+    assert result["subsample_median"] == 2.0
+    assert calls == [6] * 5
+
+
+def test_paper_mmd_rejects_unmatched_samples():
+    from dynaclr.evaluation.organelle_mmd import summarize_mmd_pairs
+
+    with pytest.raises(ValueError, match="matched pairs"):
+        summarize_mmd_pairs(np.zeros((4, 2)), np.zeros((3, 2)), bandwidth=1.0)

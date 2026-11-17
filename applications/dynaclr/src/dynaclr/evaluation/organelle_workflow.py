@@ -64,7 +64,7 @@ def canonical_obs(frame, m):
     return frame
 
 
-def validate_cells(frame):
+def validate_cells(frame, normalization_level="timepoint_statistics"):
     from viscy_data.cell_index import validate_cell_index
 
     validate_cell_index(frame)
@@ -74,7 +74,9 @@ def validate_cells(frame):
         with open_ome_zarr(f"{store}/{well}/{fov}", mode="r") as pos:
             normalization = pos.zattrs.get("normalization", {})
             for index, row in group.iterrows():
-                stats = normalization.get(row.channel_name, {}).get("timepoint_statistics", {}).get(str(int(row.t)))
+                stats = normalization.get(row.channel_name, {}).get(normalization_level, {})
+                if normalization_level == "timepoint_statistics":
+                    stats = stats.get(str(int(row.t)))
                 if not stats or not np.isfinite(stats.get("std", np.nan)) or stats["std"] <= 0:
                     raise ValueError("Missing or invalid per-frame image normalization metadata")
                 for name in ["mean", "std", "median", "iqr", "min", "max"]:
@@ -103,11 +105,19 @@ def infer(m, output):
     from dynaclr.evaluation.evaluate_config import EvaluationConfig
 
     cells = canonical_obs(pd.read_parquet(m["cell_index"]), m)
-    validate_cells(cells)
+    recipe = m.get("inference_recipe", "paper")
+    if recipe not in ("paper", "training"):
+        raise ValueError("inference_recipe must be paper or training")
+    validate_cells(cells, "fov_statistics" if recipe == "paper" else "timepoint_statistics")
     cells.to_parquet(output / "cells.parquet", index=False)
     checkpoint = Path(m["checkpoint"])
     if sha256(checkpoint) != m["checkpoint_sha256"]:
         raise ValueError("Encoder checksum mismatch")
+    if recipe == "paper":
+        from dynaclr.evaluation.organelle_inference import predict_paper_cells
+
+        destination = predict_paper_cells(cells, checkpoint, output, m.get("predict", {}).get("batch_size", 32))
+        return dict(m, embeddings=str(destination), inference_recipe="paper")
     config = EvaluationConfig.model_validate(
         dict(
             training_config=m["training_config"],
@@ -202,7 +212,8 @@ def analyze(data, m, output):
     import matplotlib.pyplot as plt
     from umap import UMAP
 
-    from viscy_utils.evaluation.mmd import compute_mmd_unbiased, median_heuristic, mmd_permutation_test
+    from dynaclr.evaluation.organelle_mmd import summarize_mmd_pairs
+    from viscy_utils.evaluation.mmd import median_heuristic
 
     settings = dict(
         seed=42,
@@ -294,33 +305,16 @@ def analyze(data, m, output):
                     results.append(dict(row, status="insufficient_matched_cells"))
                     continue
                 c, t = rng.choice(c, n, replace=False), rng.choice(t, n, replace=False)
-                value, pvalue, null = mmd_permutation_test(
-                    x[c], x[t], n_permutations=settings["permutations"], bandwidth=bandwidth, seed=settings["seed"]
+                summary = summarize_mmd_pairs(
+                    x[t],
+                    x[c],
+                    bandwidth=bandwidth,
+                    permutations=settings["permutations"],
+                    repeats=settings["repeats"],
+                    permutation_seed=settings["seed"] + 300_000,
+                    subsample_seed=settings["seed"] + 600_000,
                 )
-                scale = null.std()
-                if scale <= 0:
-                    results.append(dict(row, status="degenerate_null"))
-                    continue
-                values = []
-                for _ in range(settings["repeats"]):
-                    size = max(2, int(n * 0.8))
-                    value_sub = compute_mmd_unbiased(
-                        x[rng.choice(c, size, replace=False)], x[rng.choice(t, size, replace=False)], bandwidth
-                    )
-                    values.append((value_sub - null.mean()) / scale)
-                lo, median, hi = np.quantile(values, [0.025, 0.5, 0.975])
-                results.append(
-                    dict(
-                        row,
-                        status="ok",
-                        mmd2=value,
-                        pvalue=pvalue,
-                        standardized_mmd2=(value - null.mean()) / scale,
-                        subsample_median=median,
-                        subsample_q025=lo,
-                        subsample_q975=hi,
-                    )
-                )
+                results.append(dict(row, **summary))
                 for label, indices in [("control", c), ("treated", t)]:
                     for i in indices:
                         samples.append(dict(row, group=label, cell_id=obs.iloc[i].cell_id))
