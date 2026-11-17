@@ -1,5 +1,7 @@
 # Organelle workflow contract v1
 
+Start with the [workflow README](README.md) for the skill list, inputs and commands. This document specifies the detailed data contract.
+
 Skills live under `applications/dynaclr/skills/`; install or point your agent at their SKILL.md files. Run commands from the VisCy root. Sync the locked environment once (`uv sync --locked --package dynaclr --extra eval`); use `uv run --no-sync` during jobs.
 
 A YAML manifest has `schema_version: 1`, `root` (relative to the manifest), `feature_space` (immutable encoder identity), `control_label`, and `embeddings` for cached analysis. Paths resolve against root. `columns` maps source column names to canonical names; `metadata` supplies explicit constants only for absent columns.
