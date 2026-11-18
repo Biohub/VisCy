@@ -1,0 +1,69 @@
+# FNet2D "larger-patch, simple-augs" ablation fit-time HCS data hparams
+# (Arm A of the 2D patch-vs-augmentation split), the 2D counterpart of
+# fnet3d_bigpatch_fit.yml.
+#
+# Purpose: separate the two things that change when FNet2D adopts the
+# VSCyto2D training regime: the larger 384x384 spatial patch and the richer
+# augmentation stack. This overlay applies ONLY the larger patch with FNet's
+# own simple augmentations (YX flips), so:
+#   fnet2d (64x64, flips)  ->  fnet2d_bigpatch (384x384, flips)
+#       isolates the patch-size effect, and
+#   fnet2d_bigpatch (384x384, flips)  ->  fnet2d_vscyto2daug (384x384, augs)
+#       isolates the augmentation effect.
+# Store, normalization (mean/std), batch, crop sampler, model, optimizer and
+# precision are identical to fnet2d_vscyto2daug_fit.yml (paired), so Arm A vs
+# Arm B differ ONLY in the gpu_augmentations stack and the CPU crop size
+# (384 here; 600 there, the affine headroom its GPU center crop removes).
+#
+# batch_size stays fnet2d's 48 (12 FOVs x num_samples=4) so the optimizer
+# sees the same sample count per step as the fnet2d baseline; num_samples=4
+# is the VSCyto2D crop policy, shared by both arms.
+#
+# Structure-keyed like fnet2d_fit.yml: single-set nucleus leaves list-replace
+# normalizations + the CPU crops to re-key onto Nuclei.
+data:
+  init_args:
+    z_window_size: 1
+    batch_size: 48
+    num_workers: 8
+    yx_patch_size: [384, 384]
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Structure]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+    augmentations:
+      # CPU: crop directly to the 384x384 model input (no affine headroom
+      # needed), weighted by target intensity.
+      - class_path: viscy_transforms.RandWeightedCropd
+        init_args:
+          keys: [Phase3D, Structure]
+          w_key: Structure
+          spatial_size: [1, 384, 384]
+          num_samples: 4
+    gpu_augmentations:
+      # FNet's own simple augmentations: YX flips only (the fnet2d policy).
+      # This is the ONLY augmentation difference from fnet2d_vscyto2daug_fit.yml.
+      - class_path: viscy_transforms.BatchedRandFlipd
+        init_args:
+          keys: [source, target]
+          spatial_axes: [1]
+          prob: 0.5
+      - class_path: viscy_transforms.BatchedRandFlipd
+        init_args:
+          keys: [source, target]
+          spatial_axes: [2]
+          prob: 0.5
+    val_augmentations:
+      - class_path: viscy_transforms.CenterSpatialCropd
+        init_args:
+          keys: [Phase3D, Structure]
+          roi_size: [1, 384, 384]

@@ -27,6 +27,8 @@ builders. Not part of the installable package — run with `uv run python applic
 
 - `build_cpdino_seg_cleaned.py` (+ `.slurm`) — build the Cellpose-DINO cleaned cell-segmentation stores used as
   the fixed `io.cell_segmentation_path` for feature crops.
+- `assemble_channel_store.py` — build a new HCS store from kept channels of a base store plus renamed channels
+  from other stores (e.g. waveorder phase reconstructions); see `docs/2d-virtual-staining-tutorial.md`.
 - `fuse_a549_dual_channel_zarr.py` — fuse A549 nucleus+membrane into the dual-channel zarr for two-channel leaves.
 - `save_random_init_vscyto3d_ckpts.py` — write untrained (`_randinit`) VSCyto3D checkpoints for ablations.
 - `assemble_release_checkpoints.py` — build/update the public S3 checkpoint zoo (`dynacell_v1/models/`) from the

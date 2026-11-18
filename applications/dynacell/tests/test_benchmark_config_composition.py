@@ -549,6 +549,94 @@ def test_voxel_matched_fnet2d_writes_to_its_own_tree(organelle: str) -> None:
     assert arm["benchmark"]["model_name"] == "fnet2d_voxelmatched"
 
 
+def _load_fnet2d_nucleus(model: str) -> dict:
+    return load_composed_config(BENCHMARKS / "nucleus" / model / "ipsc_confocal" / "train.yml")
+
+
+def _crop_size(cfg: dict) -> list[int]:
+    (crop,) = cfg["data"]["init_args"]["augmentations"]
+    return crop["init_args"]["spatial_size"]
+
+
+def test_fnet2d_patch_vs_aug_arms_differ_only_where_intended() -> None:
+    """fnet2d -> bigpatch changes the patch; bigpatch -> vscyto2daug changes only the augs.
+
+    The aug arm's GPU stack must be the VSCyto2D fit stack and the bigpatch arm's must be
+    fnet2d's flips, so neither arm can silently compose at 64x64 or flips-only.
+    """
+    base = _load_fnet2d_nucleus("fnet2d")
+    big = _load_fnet2d_nucleus("fnet2d_bigpatch")
+    aug = _load_fnet2d_nucleus("fnet2d_vscyto2daug")
+    vscyto2d = _load_fnet2d_nucleus("fcmae_vscyto2d_scratch")
+    big_ia, aug_ia, base_ia = big["data"]["init_args"], aug["data"]["init_args"], base["data"]["init_args"]
+
+    # Patch: 64x64 -> 384x384 model input, same batch and z window as fnet2d.
+    assert base_ia["yx_patch_size"] == [64, 64]
+    assert big_ia["yx_patch_size"] == aug_ia["yx_patch_size"] == [384, 384]
+    assert big_ia["batch_size"] == aug_ia["batch_size"] == base_ia["batch_size"]
+    assert big_ia["z_window_size"] == aug_ia["z_window_size"] == 1
+    assert _crop_size(big) == [1, 384, 384]
+    assert _crop_size(aug) == [1, 600, 600]
+    assert big_ia["val_augmentations"] == aug_ia["val_augmentations"]
+    assert big_ia["val_augmentations"][0]["init_args"]["roi_size"] == [1, 384, 384]
+
+    # Augmentations: flips (fnet2d's) vs the VSCyto2D stack, verbatim.
+    assert big_ia["gpu_augmentations"] == base_ia["gpu_augmentations"]
+    assert aug_ia["gpu_augmentations"] == vscyto2d["data"]["init_args"]["gpu_augmentations"]
+
+    # Arm A vs Arm B: nothing else in data differs.
+    def _strip(ia: dict) -> dict:
+        ia = copy.deepcopy(ia)
+        ia.pop("gpu_augmentations")
+        ia["augmentations"][0]["init_args"].pop("spatial_size")
+        return ia
+
+    assert _strip(big_ia) == _strip(aug_ia)
+    # Same store, channels and normalization as the fnet2d baseline.
+    for key in ("data_path", "source_channel", "target_channel", "normalizations"):
+        assert big_ia[key] == base_ia[key], key
+    # Model and trainer settings: fnet2d's, plus speed flags, bf16-mixed and a 20k budget, same in both arms.
+    assert big["model"] == aug["model"]
+    model = copy.deepcopy(big["model"])
+    assert model["init_args"].pop("channels_last") is True
+    assert model == base["model"]
+    for arm in (big, aug):
+        assert arm["trainer"]["precision"] == "bf16-mixed"
+        assert arm["trainer"]["benchmark"] is True
+        # 20k steps: the 200k-step baseline fits peaked in val loss by step ~4k.
+        assert arm["trainer"]["max_steps"] == 20000
+        for key in ("max_epochs", "devices", "strategy"):
+            assert arm["trainer"].get(key) == base["trainer"].get(key), key
+
+
+@pytest.mark.parametrize("model", ["fnet2d_bigpatch", "fnet2d_vscyto2daug"])
+def test_fnet2d_patch_vs_aug_arms_write_to_their_own_tree(model: str) -> None:
+    """Checkpoints, run root and wandb name never collide with fnet2d or each other."""
+    arm = _load_fnet2d_nucleus(model)
+    ckpt = next(
+        c["init_args"]["dirpath"]
+        for c in arm["trainer"]["callbacks"]
+        if c["class_path"].endswith("ModelCheckpoint") and "dirpath" in c.get("init_args", {})
+    )
+    assert ckpt.endswith(f"/nucleus/{model}/checkpoints")
+    assert arm["launcher"]["run_root"].endswith(f"/nucleus/{model}")
+    assert arm["trainer"]["logger"]["init_args"]["save_dir"] == arm["launcher"]["run_root"]
+    assert arm["benchmark"]["model_name"] == model
+
+
+def test_fnet2d_vscyto2daug_seed1_differs_only_in_seed_and_names() -> None:
+    """The seed draw is the baseline recipe with seed_everything 1 and its own run tree."""
+    base = _load_fnet2d_nucleus("fnet2d_vscyto2daug")
+    seed1 = _load_fnet2d_nucleus("fnet2d_vscyto2daug_seed1")
+    assert seed1.pop("seed_everything") == 1
+    assert base.pop("seed_everything") == 0
+    names = ("fnet2d_vscyto2daug", "FNet2D_VSAug_iPSC_NUCL", "FNet2DVSAug_iPSC_NUCL")
+    text = yaml.safe_dump(base)
+    for name in names:
+        text = text.replace(name, name + "_seed1")
+    assert yaml.safe_load(text) == seed1
+
+
 _FNET2D_PREDICT_FILES = (
     "predict__ipsc_confocal.yml",
     "predict__a549_mantis_mock.yml",
@@ -1300,9 +1388,17 @@ _SPEED_FLAGS: dict[str, dict[str, bool]] = {
 }
 
 
+# 2-D FNet leaves that opt into the flags, measured on an A40: 1.05x from the flags alone,
+# 2.47x with bf16-mixed (see the leaves' header comments). Matched by prefix so the seed
+# draw and per-reconstruction variants (fnet2d_vscyto2daug_<name>) inherit them.
+_FLAGGED_2D_FNET_MODELS = ("fnet2d_bigpatch", "fnet2d_vscyto2daug")
+
+
 def _expected_speed_flags(cfg: dict) -> dict[str, bool]:
     """Return the flags a composed fit config must set: its 3-D family's, else none."""
     init_args = cfg["model"]["init_args"]
+    if cfg["benchmark"]["model_name"].startswith(_FLAGGED_2D_FNET_MODELS):
+        return _SPEED_FLAGS["FNet3D"]
     if init_args.get("architecture") not in _SPEED_FLAGS or init_args["model_config"]["in_stack_depth"] == 1:
         return {}
     return _SPEED_FLAGS[init_args["architecture"]]
