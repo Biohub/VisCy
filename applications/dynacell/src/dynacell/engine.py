@@ -60,10 +60,15 @@ def _ckpt_state_dict(ckpt_path: str) -> dict[str, Tensor]:
 def _record_val_loss(
     losses: list[list[tuple[Tensor, int]]], dataloader_idx: int, loss: Tensor, batch_size: int
 ) -> None:
-    """Append ``(loss, batch_size)`` to ``losses[dataloader_idx]``, growing the list first."""
+    """Append ``(loss, batch_size)`` to ``losses[dataloader_idx]``, growing the list first.
+
+    The loss is cloned so the entry owns a scalar's storage. A 0-dim loss can be backed by
+    a storage as large as a full fp32 batch tensor, which ``detach()`` shares, so a list
+    kept to epoch end would otherwise pin one batch of memory per validation step.
+    """
     while len(losses) <= dataloader_idx:
         losses.append([])
-    losses[dataloader_idx].append((loss, batch_size))
+    losses[dataloader_idx].append((loss.clone(), batch_size))
 
 
 def _aggregate_validation_losses(

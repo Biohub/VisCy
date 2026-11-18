@@ -16,8 +16,10 @@ from dynacell.engine import (
     DynacellFlowMatching,
     DynacellGAN,
     DynacellUNet,
+    _aggregate_validation_losses,
     _blend_weight,
     _phase_shift_average,
+    _record_val_loss,
     _sliding_window_inference,
 )
 from dynacell.tiling import window_starts
@@ -333,6 +335,38 @@ def test_flow_matching_validation_step_records_loss_when_enabled(synth_celldiff_
     loss, batch_size = model._validation_losses[0][0]
     assert torch.isfinite(loss)
     assert batch_size == synth_celldiff_batch["source"].shape[0]
+
+
+def test_unet_validation_step_records_loss_with_owned_storage(synth_fnet_batch):
+    """Recorded validation losses own a scalar's storage instead of pinning a batch-sized one.
+
+    CPU reproduction through the real ``DynacellUNet.validation_step`` under bf16 autocast:
+    ``MSELoss`` returns a 0-dim loss whose storage is still the size of a full fp32 batch
+    tensor, and ``detach()`` shares it. Kept for a whole validation epoch, each entry then
+    pins a batch of GPU memory (about 36 MiB per entry, 41 GiB over 1,160 batches).
+    """
+    model = DynacellUNet(architecture="FNet3D", model_config=FNET_TEST_CONFIG)
+    model.log = lambda *args, **kwargs: None
+    model.eval()
+    with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
+        model.validation_step(synth_fnet_batch, batch_idx=0)
+    loss, _ = model.validation_losses[0][0]
+    assert loss.untyped_storage().nbytes() == loss.element_size()
+
+
+def test_record_val_loss_copies_view_of_large_storage():
+    """``_record_val_loss`` detaches a 0-dim view of a big tensor from its storage, for every caller.
+
+    Reproduces the shared storage with a 0-dim view of a large tensor, the shape of the
+    batch-sized storage behind a bf16-autocast loss, and keeps the aggregation unchanged.
+    """
+    big = torch.arange(1024.0)
+    losses: list[list[tuple[torch.Tensor, int]]] = []
+    _record_val_loss(losses, 0, big[3], 2)
+    _record_val_loss(losses, 0, big[5], 6)
+    for loss, _ in losses[0]:
+        assert loss.untyped_storage().nbytes() == loss.element_size()
+    assert _aggregate_validation_losses(losses).item() == pytest.approx((3.0 * 2 + 5.0 * 6) / 8)
 
 
 def test_flow_matching_predict_step_pad_crop(synth_celldiff_batch):
