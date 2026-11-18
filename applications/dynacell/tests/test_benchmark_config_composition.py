@@ -595,7 +595,7 @@ def test_fnet2d_patch_vs_aug_arms_differ_only_where_intended() -> None:
     # Same store, channels and normalization as the fnet2d baseline.
     for key in ("data_path", "source_channel", "target_channel", "normalizations"):
         assert big_ia[key] == base_ia[key], key
-    # Model and trainer settings: fnet2d's, plus the speed flags and bf16-mixed, same in both arms.
+    # Model and trainer settings: fnet2d's, plus speed flags, bf16-mixed and a 20k budget, same in both arms.
     assert big["model"] == aug["model"]
     model = copy.deepcopy(big["model"])
     assert model["init_args"].pop("channels_last") is True
@@ -603,7 +603,9 @@ def test_fnet2d_patch_vs_aug_arms_differ_only_where_intended() -> None:
     for arm in (big, aug):
         assert arm["trainer"]["precision"] == "bf16-mixed"
         assert arm["trainer"]["benchmark"] is True
-        for key in ("max_steps", "max_epochs", "devices", "strategy"):
+        # 20k steps: the 200k-step baseline fits peaked in val loss by step ~4k.
+        assert arm["trainer"]["max_steps"] == 20000
+        for key in ("max_epochs", "devices", "strategy"):
             assert arm["trainer"].get(key) == base["trainer"].get(key), key
 
 

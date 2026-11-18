@@ -34,8 +34,9 @@ The running example is nucleus, trained on iPSC. The variant tag is `wo1`: one w
   - **Prediction** writes the 3-plane slab around the focus plane that the plane file names.
   - **Scoring** uses one plane per FOV and timepoint: the focus plane picked from the ground-truth nuclei (`focus2d.halfwidth=1`). Pixel metrics and masks are computed on that plane; the slab is used only for deep features, which the fast tier skips.
 - **Augmentations:** the VSCyto2D training augmentations (affine, contrast, intensity, noise and blur), cropped from 600 × 600.
-- **Training:** batch 48, MSE loss, 200k steps, bf16-mixed, cuDNN benchmark and channels-last.
-- **Measured speed:** 0.308 s/step on an A100 and 0.505 s/step on an A40, so 200k steps take about 17 h and 28 h.
+- **Training:** batch 48, MSE loss, **20k steps**, bf16-mixed, cuDNN benchmark and channels-last.
+- **Measured speed:** 0.308 s/step on an A100 and 0.505 s/step on an A40, so 20k steps take about 1.7 h and 2.8 h.
+- **Why 20k steps:** the two baseline fits were launched at 200k steps (the vanilla `fnet2d` budget). Their validation loss bottomed out at step 3,818 (seed 0) and 2,158–2,988 (seed 1), about 2% of that, and then rose (+12% by step 36k) while training loss kept falling. At 384² × batch 48, each step carries 36× the pixels of vanilla FNet2D's 64² patches. 20k steps is about 5× the best step. The two baseline fits still run to 200k; their predicts use the best checkpoint (`--ckpt best`), which is from the first few thousand steps. The learning rate is constant (`schedule: Constant`), so the first 20k steps of a 200k-step run follow the same recipe as a 20k-step run, and the baselines' best checkpoints compare directly with 20k-step variants. Validation loss is not the target metric, so if a reconstruction's curve is still falling at 20k, lengthen that variant with `trainer: {max_steps: ...}` in its config.
 
 **Plane files and lite caches already exist.** Every test store carries a Brightfield channel, so you can reconstruct phase on both the train and the test side. The plane files are picked from the ground-truth nuclei, not from the input channel, so one file serves every reconstruction.
 
@@ -192,7 +193,7 @@ uv run python applications/dynacell/tools/submit_benchmark_job.py $LEAF --resume
 - **Check before submitting:** in `--print-resolved-config`, look for `precision: bf16-mixed`, `benchmark: true`, `channels_last: true`, your `source_channel` and your `dirpath`.
 - **Job resources:** 1 GPU of any type on the `gpu` partition, 32 CPUs, 128 GB, 20-day wall limit.
 - **Following the run:** progress is in wandb, project `dynacell`, group = `trainer.logger.init_args.name`.
-- **Is it done?** A fit is done when its last checkpoint reaches 200k steps. wandb's `finished` state alone also appears for killed runs.
+- **Is it done?** A fit is done when its last checkpoint reaches `max_steps` (20k). wandb's `finished` state alone also appears for killed runs.
 - **Throughput:** the resolved config runs the training job at the speeds in §0. Alex submitted the baseline this way; submitting a variant this way is **(not run)**.
 
 ## 4. Predict on DynaCell-lite

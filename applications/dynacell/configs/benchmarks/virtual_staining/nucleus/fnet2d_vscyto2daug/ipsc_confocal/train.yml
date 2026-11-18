@@ -75,6 +75,12 @@ model:
 trainer:
   benchmark: true
   precision: bf16-mixed
+  # 20k steps, not fnet2d's 200k. The first 200k-step baseline fits (seed 0 and 1,
+  # 2026-11-17) reached their minimum validation loss at step 3818 and 2158-2988
+  # (about 2% of 200k) and rose afterwards (+12% by step 36k): at 384^2 x batch 48
+  # each step carries 36x the pixels of fnet2d's 64^2 patches. 20k is ~5x the best
+  # step, about 1.7 h on an A100 at the measured 0.31 s/step.
+  max_steps: 20000
   logger:
     init_args:
       name: FNet2D_VSAug_iPSC_NUCL
