@@ -171,6 +171,7 @@ def infer(m, output):
     (output / "configs").mkdir()
     cfg = _generate_predict_yaml(config, training_cfg, output)
     resolved = yaml.safe_load(cfg.read_text())
+    resolved["trainer"]["default_root_dir"] = str(output)
     if config.predict.num_workers == 0:
         resolved["data"]["init_args"]["prefetch_factor"] = None
     init = resolved["data"]["init_args"]
