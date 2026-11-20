@@ -13,6 +13,7 @@ This workflow uses DynaCLR checkpoints and optional saved classifiers.
 | [organelle-analysis](../../skills/organelle-analysis/SKILL.md) | Embeddings and experiment, control and timing metadata. | PCA/UMAP figures and control-versus-treated MMD curves. |
 
 Cell coordinates are sufficient for inference and population analysis.
+Without a coordinate Parquet, `cells-from-labels` builds one from nuclear labels.
 Track or lineage sampling requires genuine track or lineage identifiers.
 
 ## Required resources
@@ -21,7 +22,7 @@ Track or lineage sampling requires genuine track or lineage identifiers.
 | --- | --- |
 | Software | VisCy revision and `uv.lock`. |
 | Images | AI-ready OME-Zarr with channel, pixel-size, focus and normalization metadata. Required for inference. |
-| Cell-coordinate Parquet | Source image paths, cell identifiers, frames, coordinates, channels, image dimensions and physical pixel sizes. Required for inference. |
+| Cell-coordinate Parquet | Source image paths, cell identifiers, frames, coordinates, channels, image dimensions and physical pixel sizes. Required for inference. Build it from nuclear labels with `cells-from-labels` when absent. |
 | Encoder | DynaCLR checkpoint, SHA-256 checksum and inference recipe. |
 | Classifiers | Trusted model files, checksums, marker and feature-space identity. Required for new classifier predictions. |
 | Metadata | `cell_id`, `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. |
@@ -31,6 +32,7 @@ The experiment, cell identifier and marker combination must be unique.
 Use `columns` to rename external metadata fields.
 Use `metadata` to supply constants for absent fields.
 Supply physical timing explicitly.
+Ask the data owner for the start HPI and frame interval; they differ between datasets.
 
 The [input/output contract](CONTRACT.md) specifies coordinate fields, inference recipes, classifier requirements and output formats.
 
@@ -46,6 +48,10 @@ uv sync --locked --package dynaclr --extra eval
 Use a new output directory for each command.
 
 ```bash
+# Optional: build an untracked cell index from nuclear-label centroids.
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow cells-from-labels \
+  --manifest cells.yaml --output results/cells
+
 # Extract raw embeddings and optional classifier predictions.
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow infer \
   --manifest inference.yaml --output results/inference
@@ -65,9 +71,39 @@ uv run --no-sync python -m dynaclr.evaluation.organelle_workflow analyze \
 
 | Manifest | Input configuration |
 | --- | --- |
+| `cells.yaml` | Set `labels` and `timing`. See the example below. |
 | `inference.yaml` | Set `cell_index`, `checkpoint` and `checkpoint_sha256`. The default recipe is `paper`. |
 | `normalize.yaml` | Set `embeddings` to `results/inference/predictions.zarr`. |
 | `analysis.yaml` | Set `embeddings` to `results/normalized/normalized.zarr`. |
+
+A `cells.yaml` for a plate with nuclear labels:
+
+```yaml
+schema_version: 1
+root: .
+feature_space: replace-with-encoder-sha256
+control_label: uninfected
+labels:
+  store: plate.ome.zarr
+  label: nuclei
+  channels:
+    - name: GFP
+      marker: G3BP1
+  perturbation_wells:
+    uninfected: [G3BP1/uninfected1, G3BP1/uninfected2]
+    ZIKV: [G3BP1/ZIKV]
+metadata:
+  experiment: experiment-name
+  control_group: acquisition-1
+  replicate: biological-replicate-1
+  microscope: microscope-name
+timing:
+  first_frame_hpi: 6
+  interval_minutes: 360
+```
+
+`cells-from-labels` writes `cells.parquet`, `excluded_cells.parquet` (nuclei whose crop crosses the image border) and `cells_summary.json`.
+It checks `interval_minutes` against the image time scale and requires per-FOV normalization statistics for each channel.
 
 Paths resolve against the manifest's `root`.
 Keep the metadata and control label consistent across stages.

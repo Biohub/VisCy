@@ -9,9 +9,11 @@ metadata:
   control_group: acquisition-1
   replicate: biological-replicate-1
 # Supply experiment/marker/perturbation per observation, not inferred from paths.
+# Required unless observations carry hours_post_perturbation. Ask the data owner:
+# the start HPI differs between datasets and is never assumed.
 timing:
-  interval_minutes: 30
-  first_frame_hpi: 3
+  interval_minutes: null
+  first_frame_hpi: null
 analysis:
   seed: 42
   min_cells: 20

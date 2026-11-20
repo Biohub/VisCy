@@ -14,6 +14,7 @@ import pandas as pd
 import yaml
 from sklearn.decomposition import PCA
 
+from dynaclr.evaluation.organelle_cells import TIMING_HELP, cells_from_labels, require_timing
 from dynaclr.evaluation.organelle_normalization import (
     CONTRACT_KEY,
     export_embeddings,
@@ -41,6 +42,8 @@ def load_manifest(path):
             m[key] = str((root / m[key]).resolve())
     for model in m.get("classifiers", []):
         model["path"] = str((root / model["path"]).resolve())
+    if m.get("labels", {}).get("store"):
+        m["labels"]["store"] = str((root / m["labels"]["store"]).resolve())
     return m
 
 
@@ -51,8 +54,8 @@ def canonical_obs(frame, m):
         if key not in frame:
             frame[key] = value
     if "hours_post_perturbation" not in frame and "timing" in m:
-        timing = m["timing"]
-        frame["hours_post_perturbation"] = frame["t"] * timing["interval_minutes"] / 60 + timing["first_frame_hpi"]
+        first_frame_hpi, interval_minutes = require_timing(m)
+        frame["hours_post_perturbation"] = frame["t"] * interval_minutes / 60 + first_frame_hpi
     required = [
         "cell_id",
         "experiment",
@@ -64,7 +67,8 @@ def canonical_obs(frame, m):
     ]
     missing = set(required) - set(frame)
     if missing:
-        raise ValueError(f"Missing metadata: {sorted(missing)}")
+        hint = f" {TIMING_HELP}" if "hours_post_perturbation" in missing else ""
+        raise ValueError(f"Missing metadata: {sorted(missing)}.{hint}")
     if frame[required].isna().any().any():
         raise ValueError("Required metadata contains null values")
     if frame.duplicated(["experiment", "cell_id", "marker"]).any():
@@ -88,7 +92,10 @@ def validate_cells(frame, normalization_level="timepoint_statistics"):
                 if normalization_level == "timepoint_statistics":
                     stats = stats.get(str(int(row.t)))
                 if not stats or not np.isfinite(stats.get("std", np.nan)) or stats["std"] <= 0:
-                    raise ValueError("Missing or invalid per-frame image normalization metadata")
+                    raise ValueError(
+                        f"Missing or invalid {normalization_level} for channel {row.channel_name!r} in "
+                        f"{store}/{well}/{fov}; normalization metadata has channels {sorted(normalization)}"
+                    )
                 for name in ["mean", "std", "median", "iqr", "min", "max"]:
                     frame.loc[index, "norm_" + name] = stats[name]
             unknown = set(group.channel_name) - set(pos.channel_names)
@@ -323,19 +330,55 @@ def analyze(data, m, output, *, plot_only=False):
     return settings
 
 
+STAGES = ("cells-from-labels", "infer", "normalize", "plot", "analyze")
+
+
 def run(manifest, output, stage):
     # AnnData's installed writer predates pandas Arrow-string inference.
     with pd.option_context("future.infer_string", False):
         return _run(manifest, output, stage)
 
 
+def build_cells(m, output):
+    """Write an untracked cell index from nuclear-label centroids, validated for infer."""
+    cells, excluded = cells_from_labels(m)
+    cells = canonical_obs(cells, m)
+    validate_cells(cells.copy(), "fov_statistics")
+    cells.to_parquet(output / "cells.parquet", index=False)
+    excluded.to_parquet(output / "excluded_cells.parquet", index=False)
+    counts = cells.groupby(["marker", "perturbation", "hours_post_perturbation"]).size()
+    summary = dict(
+        cells=len(cells),
+        excluded=excluded.exclusion_reason.value_counts().to_dict(),
+        per_marker_perturbation_hpi=[dict(zip(counts.index.names, k), n=int(n)) for k, n in counts.items()],
+    )
+    (output / "cells_summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    return summary
+
+
+def _write_provenance(output, m, stage, **extra):
+    provenance = dict(
+        schema_version=1,
+        manifest=m,
+        stage=stage,
+        git_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        **extra,
+    )
+    (output / "provenance.json").write_text(json.dumps(provenance, indent=2, default=str))
+    (output / "artifacts.json").write_text(json.dumps(sorted(p.name for p in output.iterdir()), indent=2))
+
+
 def _run(manifest, output, stage):
-    if stage not in ("infer", "normalize", "plot", "analyze"):
+    if stage not in STAGES:
         raise ValueError(f"Unknown stage: {stage}")
     m = load_manifest(manifest)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "resolved_manifest.yaml").write_text(yaml.safe_dump(m))
+    if stage == "cells-from-labels":
+        summary = build_cells(m, output)
+        _write_provenance(output, m, stage, cells=summary, track_identity="none; nucleus labels are per-frame")
+        return
     if stage == "infer":
         m = infer(m, output)
     data = ad.read_zarr(m["embeddings"])
@@ -389,24 +432,21 @@ def _run(manifest, output, stage):
     store = "normalized.zarr" if stage == "normalize" else "predictions.zarr"
     data.write_zarr(output / store, convert_strings_to_categoricals=False)
     settings = analyze(data, m, output, plot_only=stage == "plot") if stage in ("analyze", "plot") else {}
-    provenance = dict(
-        schema_version=1,
-        manifest=m,
+    _write_provenance(
+        output,
+        m,
+        stage,
         analysis=settings,
-        stage=stage,
         representation=settings.get("representation", "control_mad" if normalized else "encoder X"),
         cohort="all treated observations",
         sampling_unit=settings.get("sampling_unit", "observation"),
         interval="subsampling stability; not biological replicate confidence",
-        git_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
     )
-    (output / "provenance.json").write_text(json.dumps(provenance, indent=2))
-    (output / "artifacts.json").write_text(json.dumps(sorted(p.name for p in output.iterdir()), indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["infer", "normalize", "plot", "analyze"])
+    parser.add_argument("stage", choices=STAGES)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
