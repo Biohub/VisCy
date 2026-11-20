@@ -214,45 +214,13 @@ class MMDCombinedConfig(_MMDBaseConfig):
         Subtract each experiment's own mean embedding before computing MMD.
         Default True detects *residual* batch effects independent of a global
         offset. Set False to keep the raw mean shift between experiments — this
-        is required to validate a LOT correction whose main job is removing that
+        is required to validate a batch correction whose main job is removing that
         offset (centering would delete the very effect being measured, so a
         genuine platform separation would collapse to a small MMD). Default: True.
     """
 
     input_paths: list[str]
     center_per_experiment: bool = True
-
-
-class MMDOverTimeConfig(MMDCombinedConfig):
-    """Pre/post batch-effect MMD over time in a single run.
-
-    Runs combined cross-experiment MMD on the pre-LOT coordinates stored in
-    ``corrected_paths[*].obsm["X_pre_lot"]`` and post-LOT coordinates in
-    ``corrected_paths[*].X``. Both therefore use the same scaler/PCA space.
-    ``input_paths`` identify the expected experiment-marker populations.
-
-    Parameters
-    ----------
-    corrected_paths : list[str]
-        Paths to the LOT-corrected per-experiment AnnData zarr stores. Should
-        cover the same experiments as ``input_paths`` (matched by
-        ``obs["experiment"]``, not list order).
-    target_experiments : list[str] or None
-        ``obs["experiment"]`` value(s) of the target/reference platform (v2).
-        Used to tag each experiment pair as ``pair_kind="cross"`` (source↔target,
-        the batch effect being corrected) vs ``"within"`` (source↔source, the
-        within-platform baseline). When None, all pairs are ``"cross"``.
-        Default: None.
-    """
-
-    corrected_paths: list[str]
-    target_experiments: list[str] | None = None
-
-    @model_validator(mode="after")
-    def _validate_over_time(self) -> "MMDOverTimeConfig":
-        if not self.corrected_paths:
-            raise ValueError("corrected_paths must not be empty")
-        return self
 
 
 class MMDPooledConfig(_MMDBaseConfig):
@@ -296,7 +264,7 @@ class EmbeddingConsistencyConfig(_MMDBaseConfig):
     long-form output into a symmetric per-marker dataset x dataset MMD matrix.
     A diagonal-dominant matrix (low off-diagonal MMD) means the embedding space
     is comparable across acquisitions; large off-diagonal MMD flags a batch
-    effect that LOT correction must fix before downstream tasks trust the
+    effect that batch correction must fix before downstream tasks trust the
     embeddings. This QC only *detects and reports* — it does not correct.
 
     Parameters

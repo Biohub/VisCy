@@ -56,7 +56,6 @@ optional-dependencies.eval = [
   "joblib",
   "natsort",
   "phate",
-  "pot",
   "scikit-learn",
   "statsmodels",
   "umap-learn",

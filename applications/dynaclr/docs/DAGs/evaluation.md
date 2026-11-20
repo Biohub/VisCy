@@ -159,8 +159,8 @@ representation:
   pca_variance: null
 ```
 
-`--combined` and `--over-time` do not apply this self-normalization because
-their purpose is to measure cross-experiment batch effects in the supplied
+`--combined` does not apply this self-normalization because
+its purpose is to measure cross-experiment batch effects in the supplied
 coordinate system.
 
 For standalone runs, use a generated MMD YAML:

@@ -86,8 +86,8 @@ representation:
   pca_variance: null
 ```
 
-Cross-experiment `--combined` and correction `--over-time` modes remain in
-their supplied coordinates so the preprocessing cannot erase the batch effect
+The cross-experiment `--combined` mode remains in
+its supplied coordinates so the preprocessing cannot erase the batch effect
 being measured.
 
 The only maintained biological-state recipe is
