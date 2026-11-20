@@ -12,7 +12,6 @@ flowchart TD
     D --> E
     E --> F["Frozen embedding zarrs"]
     F --> G["Evaluation"]
-    F --> H["LOT correction"]
     F --> I["Witness-GMM labels"]
     F --> J["Pseudotime"]
 ```
@@ -99,7 +98,6 @@ embeddings keeps prediction separate from downstream iteration. See
 | --- | --- | --- |
 | Batch evaluation | `dynaclr eval` or Nextflow `evaluation` | [evaluation.md](evaluation.md) |
 | Evaluation matrix | `dynaclr run-matrix` | [evaluation_matrix.md](evaluation_matrix.md) |
-| LOT correction | `dynaclr fit-lot-correction` / `apply-lot-correction` | [lot_correction.md](lot_correction.md) |
 | Witness pseudo-labels | `dynaclr witness-gmm-labels` | [witness_gmm_classifiers.md](witness_gmm_classifiers.md) |
 | Pseudotime scripts | staged Python CLIs | [pseudotime.md](pseudotime.md) |
 

@@ -10,14 +10,12 @@ import pytest
 from dynaclr.evaluation.mmd.compute_mmd import (
     run_mmd_analysis,
     run_mmd_combined,
-    run_mmd_over_time,
     run_mmd_pooled,
 )
 from dynaclr.evaluation.mmd.config import (
     ComparisonSpec,
     MMDCombinedConfig,
     MMDEvalConfig,
-    MMDOverTimeConfig,
     MMDPooledConfig,
     MMDRepresentationConfig,
     MMDSettings,
@@ -512,50 +510,6 @@ def test_run_mmd_combined_keeps_all_marker_stores(tmp_path):
 
     assert set(result["marker"]) == {"SEC61B", "TOMM20"}
     assert len(result) == 2
-
-
-def test_run_mmd_over_time_uses_pre_lot_coordinates(tmp_path):
-    """Pre/post results must use matching scaler/PCA coordinates."""
-    raw_paths = []
-    corrected_paths = []
-    for index, experiment in enumerate(["exp_a", "exp_b"]):
-        rng = np.random.default_rng(index)
-        obs = pd.DataFrame(
-            {
-                "experiment": [experiment] * 30,
-                "marker": ["SEC61B"] * 30,
-                "perturbation": ["uninfected"] * 30,
-            }
-        )
-
-        raw_path = str(tmp_path / f"{experiment}_raw.zarr")
-        _save_adata_zarr(
-            ad.AnnData(X=rng.normal(size=(30, 7)).astype(np.float32), obs=obs.copy()),
-            raw_path,
-        )
-        raw_paths.append(raw_path)
-
-        corrected = ad.AnnData(
-            X=rng.normal(size=(30, 3)).astype(np.float32),
-            obs=obs.copy(),
-        )
-        corrected.obsm["X_pre_lot"] = rng.normal(size=(30, 3)).astype(np.float32)
-        corrected_path = str(tmp_path / f"{experiment}_corrected.zarr")
-        _save_adata_zarr(corrected, corrected_path)
-        corrected_paths.append(corrected_path)
-
-    result = run_mmd_over_time(
-        MMDOverTimeConfig(
-            input_paths=raw_paths,
-            corrected_paths=corrected_paths,
-            output_dir=str(tmp_path / "out"),
-            mmd=MMDSettings(n_permutations=10, min_cells=10),
-        )
-    )
-
-    assert set(result["correction"]) == {"pre", "post"}
-    assert set(result.loc[result["correction"] == "pre", "embedding_key"]) == {"X_pre_lot"}
-    assert set(result.loc[result["correction"] == "post", "embedding_key"]) == {"X"}
 
 
 def test_run_mmd_pooled_columns(tmp_path):
