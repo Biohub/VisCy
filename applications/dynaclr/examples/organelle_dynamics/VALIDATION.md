@@ -2,6 +2,10 @@
 
 Executed on 2026-11-17 using the archived ZIKV paper cohort, checkpoint `epoch=105-step=84800.ckpt`, and an NVIDIA A40. Numerical reports are versioned alongside this document. Generated arrays, tables, logs and PDF/PNG figures are retained under `/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/publication-validation/`.
 
+The following results validate individual workflow components.
+They do not establish complete Figure 6 reproduction.
+The original checks used four skills; the current interface contains `embed` and `phenotype`.
+
 ## Results
 
 | Stage | Compared data | Result | Evidence |
@@ -76,4 +80,38 @@ An initial run constrained BLAS to one thread and produced small PCA roundoff di
 # Reference is a completed population-analysis bundle, containing resolved_manifest.yaml.
 uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/verify_steps.py \
   --reference path/to/population-analysis --output results/verify-steps
+```
+
+
+## Two-skill interface
+
+The current skills are `embed` and `phenotype`.
+Image preprocessing belongs to `embed`.
+Control-relative embedding normalization belongs to `phenotype`.
+
+| Check | Result |
+| --- | --- |
+| CELL-DINO `embed` | Two real cell crops produce finite 1,024-feature embeddings. Parquet exactly preserves the raw vectors. |
+| Embedding-only output | No classifier predictions or control-normalized embeddings appear in the CELL-DINO output. |
+| `phenotype` | 192 paper observations retain exact raw vectors, normalized exports and previous MMD tables. |
+| Regression tests | 20 tests pass, including checkpoint selection and separation of embedding from classification. |
+| Skill validation | Both skills pass the skill validator. |
+
+The [integration report](validation/embed_phenotype.json) records the input manifests and output directories.
+These checks establish command integration and output integrity.
+They do not establish CELL-DINO biological accuracy or complete Figure 6 reproduction.
+
+The first CELL-DINO attempts encountered unsupported percentile-transform configurations in the Lightning command parser.
+The final recipe uses the CELL-DINO wrapper's own image normalization.
+It applies spatial z-score normalization separately to each image and channel after resizing.
+The selected weights, configuration hash and generated prediction configuration remain in the output directory.
+
+Run the saved manifests with new output directories to repeat these checks:
+
+```bash
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow embed \
+  --manifest "$CELL_DINO_MANIFEST" --output results/check-cell-dino
+
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow phenotype \
+  --manifest "$PHENOTYPE_MANIFEST" --output results/check-phenotype
 ```

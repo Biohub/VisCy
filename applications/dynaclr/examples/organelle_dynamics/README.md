@@ -1,40 +1,64 @@
-# Organelle dynamics workflow
+# Embed and phenotype
 
-Run inference, control normalization, plotting and population analysis on paper data or external microscopy data.
-This workflow uses DynaCLR checkpoints and optional saved classifiers.
-
-## Skills
+Use two skills to extract cell embeddings and measure population changes.
 
 | Skill | Required inputs | Outputs |
 | --- | --- | --- |
-| [organelle-inference](../../skills/organelle-inference/SKILL.md) | Images, cell-coordinate Parquet, metadata, encoder checkpoint and checksum. Optional classifier models. | Raw embeddings and classifier predictions. |
-| [organelle-normalization](../../skills/organelle-normalization/SKILL.md) | Raw embeddings, metadata and the dataset's own controls. | Normalized embeddings, preserved raw embeddings and fitted control parameters. |
-| [organelle-plotting](../../skills/organelle-plotting/SKILL.md) | Normalized embeddings and available infection labels. | PCA/UMAP coordinates, figures and fitted models. |
-| [organelle-analysis](../../skills/organelle-analysis/SKILL.md) | Embeddings and experiment, control and timing metadata. | PCA/UMAP figures and control-versus-treated MMD curves. |
+| [embed](../../skills/embed/SKILL.md) | Images, cell-coordinate Parquet, metadata, selected checkpoint, checksum and matching preprocessing configuration. | Raw embeddings and source metadata. |
+| [phenotype](../../skills/phenotype/SKILL.md) | Embeddings, control label and experiment, marker, control-group and timing metadata. | Control-normalized embeddings, PCA/UMAP figures and MMD comparisons. |
 
-Cell coordinates are sufficient for inference and population analysis.
-Track or lineage sampling requires genuine track or lineage identifiers.
+Cell coordinates are sufficient for these skills.
+Track or lineage sampling requires genuine identifiers.
+
+## Normalization
+
+| Operation | Skill | Purpose |
+| --- | --- | --- |
+| Image cropping, focus selection, resizing, channel selection and intensity normalization | `embed` | Prepare images for the selected checkpoint. |
+| Control-relative median/MAD normalization of embedding vectors | `phenotype` | Compare treated cells with their own controls. |
+
+Keep each checkpoint's image preprocessing configuration.
+Image normalization and embedding normalization act on different inputs.
+
+## Checkpoint selection
+
+| Model | Manifest settings |
+| --- | --- |
+| Paper DynaCLR | `model_family: dynaclr`, `inference_recipe: paper`, checkpoint and SHA-256. |
+| Other DynaCell/DynaCLR representation checkpoint | `model_family: dynacell`, `inference_recipe: training`, matching `training_config`, checkpoint and SHA-256. |
+| Frozen CELL-DINO | `model_family: cell_dino`, matching `training_config`, local `.pth` checkpoint and SHA-256. |
+
+The paper recipe uses the verified DynaCLR architecture and image preprocessing.
+Other representation checkpoints require their matching model configuration.
+These configurations must expose the VisCy embedding prediction interface.
+
+CELL-DINO uses the [embedding configuration](cell_dino_recipe.yaml).
+The selected manifest checkpoint replaces the configuration's `weights_path`.
+The runner checks its checksum before loading weights.
+
+Use `predict.embedding_key: projections` when selecting a trained projection-head representation through the training recipe.
+Include the checkpoint, preprocessing and selected representation in `feature_space`.
+Keep different feature spaces separate during analysis.
 
 ## Required resources
 
 | Resource | Requirements |
 | --- | --- |
 | Software | VisCy revision and `uv.lock`. |
-| Images | AI-ready OME-Zarr with channel, pixel-size, focus and normalization metadata. Required for inference. |
-| Cell-coordinate Parquet | Source image paths, cell identifiers, frames, coordinates, channels, image dimensions and physical pixel sizes. Required for inference. |
-| Encoder | DynaCLR checkpoint, SHA-256 checksum and inference recipe. |
-| Classifiers | Trusted model files, checksums, marker and feature-space identity. Required for new classifier predictions. |
+| Images | AI-ready OME-Zarr with channel, pixel-size, focus and normalization metadata. |
+| Cell-coordinate Parquet | Source paths, cell identifiers, frames, coordinates, channels, image dimensions and physical pixel sizes. |
 | Metadata | `cell_id`, `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. |
-| Manifest | YAML input paths, metadata mappings, control label and analysis settings. See the [template](manifest.yaml). |
+| Encoder | Selected checkpoint, SHA-256 checksum and matching model/image configuration. |
+| Optional classifiers | Trusted model files, checksums, matching marker and feature-space identity. Supply these to `phenotype`. |
 
 The experiment, cell identifier and marker combination must be unique.
 Use `columns` to rename external metadata fields.
 Use `metadata` to supply constants for absent fields.
 Supply physical timing explicitly.
 
-The [input/output contract](CONTRACT.md) specifies coordinate fields, inference recipes, classifier requirements and output formats.
+See the [input/output contract](CONTRACT.md) for coordinate fields and output formats.
 
-## Run the workflow
+## Run the skills
 
 Run commands from the VisCy repository root.
 Install the locked environment once:
@@ -43,111 +67,73 @@ Install the locked environment once:
 uv sync --locked --package dynaclr --extra eval
 ```
 
+Prepare an embedding manifest from the [DynaCell template](embed_dynacell.yaml) or [CELL-DINO template](embed_cell_dino.yaml).
+Replace the example paths and checkpoint checksum.
 Use a new output directory for each command.
 
 ```bash
-# Extract raw embeddings and optional classifier predictions.
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow infer \
-  --manifest inference.yaml --output results/inference
+# Images and checkpoint-specific preprocessing → raw embeddings.
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow embed \
+  --manifest embed.yaml --output results/embedding
 
-# Normalize embeddings against the dataset's own controls.
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow normalize \
-  --manifest normalize.yaml --output results/normalized
-
-# Generate PCA/UMAP figures.
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow plot \
-  --manifest analysis.yaml --output results/plots
-
-# Generate figures and MMD tables.
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow analyze \
-  --manifest analysis.yaml --output results/analysis
+# Raw embeddings → control normalization, PCA/UMAP and MMD.
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow phenotype \
+  --manifest phenotype.yaml --output results/phenotype
 ```
 
-| Manifest | Input configuration |
-| --- | --- |
-| `inference.yaml` | Set `cell_index`, `checkpoint` and `checkpoint_sha256`. The default recipe is `paper`. |
-| `normalize.yaml` | Set `embeddings` to `results/inference/predictions.zarr`. |
-| `analysis.yaml` | Set `embeddings` to `results/normalized/normalized.zarr`. |
-
+Set `embeddings` in the [phenotype manifest](manifest.yaml) to `results/embedding/predictions.zarr`.
 Paths resolve against the manifest's `root`.
-Keep the metadata and control label consistent across stages.
-Remove `classifiers` when predictions already exist.
-The explicit `training` inference recipe also requires `training_config`.
+Keep metadata and feature-space identity consistent between skills.
+The `embed` command rejects classifier configurations.
+Optional classifiers run inside `phenotype` using compatible raw embeddings.
 
-## Saved embeddings and predictions
+The `normalize` and `plot` commands remain available for separate intermediate outputs.
+The `infer` and `analyze` commands remain available for existing manifests.
+These commands do not require additional skills.
+
+## Saved outputs
 
 | Output | Contents |
 | --- | --- |
-| `predictions.zarr` | Raw encoder `X`, metadata and classifier predictions. Plotting and normalized analysis also retain `obsm/X_control_mad`. |
-| `normalized.zarr` | Raw encoder `X` and normalized `obsm/X_control_mad`. |
-| `embeddings.parquet` | Raw `embeddings` vectors. Normalized runs also include `ctrl-norm-embedding` vectors. |
-| `predictions.parquet` | Metadata, classifier labels and probabilities. |
-| `normalization.json` | Fitted control parameters and source/output checksums. |
+| `predictions.zarr` | Raw encoder `X`, metadata and optional phenotype classifier predictions. Phenotype also stores `obsm/X_control_mad`. |
+| `embeddings.parquet` | Raw `embeddings` vectors. Phenotype also stores normalized `ctrl-norm-embedding` vectors. |
+| `normalization.json` | Phenotype control parameters and source/output checksums. |
+| Coordinate Parquet and PNG/PDF files | Phenotype PCA/UMAP coordinates and figures. |
+| `mmd_curves.csv` and `mmd_samples.parquet` | Phenotype population comparisons and selected observations. |
+| Resolved configuration and provenance | Input paths, checkpoint identity, settings and software revision. |
 
-Normalization fits each marker, experiment and control group separately.
+Phenotype fits normalization separately for each marker, experiment and control group.
 Each group requires controls at two or more HPI values.
 HPI means hours post infection in the paper data.
 The method uses smoothed control medians and median absolute deviation (MAD) scaling.
-Classifiers use raw encoder embeddings.
 
-Plotting checks the saved normalization against the input data.
-Run normalization again after changing the cell population, controls or raw embeddings.
-The combined `analyze` command also accepts raw embeddings and saves their normalization.
-
-MMD measures differences between populations.
-The default analysis compares all treated cells with controls at the same experiment, control group and HPI.
-Treatment labels, infection annotations and classifier predictions occupy separate fields.
-
-PCA retains 80% of normalized feature variance by default.
+MMD compares all treated cells with controls at the same experiment, control group and HPI.
+PCA retains at least 80% of normalized feature variance by default.
 MMD uses these PCA features.
 UMAP provides visualization coordinates.
 Subsampling intervals describe stability, not biological replicate confidence.
 
-## Paper resources
+## Resources and validation
 
-The [resource list](CONTRACT.md#artifact-inventory) identifies checkpoints, configurations, classifier models and cached embeddings.
-Set `PREDICTION_ROOT` to the paper's `epoch105-step84800` directory containing `embeddings/` and `classifier/`.
-
-```bash
-# List local resources and file checksums.
-uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/build_paper_inventory.py \
-  --prediction-root "$PREDICTION_ROOT" --output paper_inventory.json
-
-# Run a small SEC61B analysis with a saved infection classifier.
-uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/smoke_paper.py \
-  --prediction-root "$PREDICTION_ROOT" --output results/paper-smoke
-```
-
-The inventory records local resource paths and file checksums.
-Image paths and cell-coordinate Parquet paths also appear in the run manifests.
-The inventory has no public download locations.
-
-## Validation
-
-The [validation report](VALIDATION.md) contains comparison methods, tolerances, saved results and rerun commands.
+The [resource list](CONTRACT.md#artifact-inventory) identifies paper checkpoints, configurations, classifiers and cached embeddings.
+The [validation report](VALIDATION.md) records component comparisons and rerun commands.
 
 | Check | Recorded result |
 | --- | --- |
-| Fresh inference | 96 cells across six marker/dataset pairs match within float32 tolerance. Maximum absolute difference: 0.000383. |
-| Infection classifiers | 96/96 labels match. Maximum probability difference: 0.0002074. |
-| Normalization and cached PCA | Exact agreement across 257,856 observations. |
-| Paper MMD | 3,339 comparisons pass across 371 HPI bins. Maximum absolute difference: 2.85e-14. |
-| Separate normalization and plotting | 192 cells retain exact raw vectors, normalized exports, plotting coordinates, classifier predictions and previous MMD results. |
-| Regression checks | 16 tests and four skill validators pass. |
+| Paper DynaCLR inference | 96 cells match within float32 tolerance. Maximum absolute difference: 0.000383. |
+| CELL-DINO embedding | Two real cell crops produce finite 1,024-feature vectors. Parquet preserves the raw vectors exactly. |
+| Phenotype entrypoint | 192 observations retain exact raw vectors, normalized exports and previous MMD tables. |
+| Saved infection classifiers | 96/96 labels match. |
+| Control normalization and cached PCA | Exact agreement across 257,856 observations. |
+| Saved ZIKV HPI MMD | 3,339 comparisons pass across 371 bins. |
+| Separate normalization and plotting | 192 observations preserve raw vectors, normalized exports, coordinates and previous MMD results. |
 
-Paper comparisons use the saved cell population, PCA models, matched samples and random seeds.
-The default workflow compares all treated cells.
+These checks validate workflow components.
+They do not establish complete Figure 6 reproduction.
+Witness scores, witness predictions and temporal alignment are outside the current skills.
 
 Validation outputs:
 
 ```text
-/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/publication-validation/
+/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/
 ```
-
-## Proposed changes
-
-The proposed names are `dynacell-embedding` and `dynacell-profiling`.
-Consolidation remains undecided.
-CELL-DINO selection and separate witness scores and predictions are proposed additions to this workflow.
-The four skills listed above remain the implemented interface.
-Temporal alignment is outside this workflow.

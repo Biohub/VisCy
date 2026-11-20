@@ -1,4 +1,4 @@
-"""Portable organelle analysis bundles. Run with python -m ...organelle_workflow."""
+"""Portable cell embedding and phenotyping bundles."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import anndata as ad
@@ -109,13 +110,41 @@ def validate_cells(frame, normalization_level="timepoint_statistics"):
         raise ValueError("Frame indices must be integers")
 
 
+def prediction_model_config(m):
+    """Select local foundation weights or a Lightning checkpoint without mixing loaders."""
+    config = yaml.safe_load(Path(m["training_config"]).read_text())
+    checkpoint = str(Path(m["checkpoint"]).resolve())
+    if m.get("model_family", "dynaclr") != "cell_dino":
+        return config, checkpoint
+    model = config["model"]["init_args"]
+    encoder = model["encoder"]
+    if encoder["class_path"] not in (
+        "viscy_models.foundation.cell_dino.CellDinoModel",
+        "viscy_models.foundation.CellDinoModel",
+    ):
+        raise ValueError("CELL-DINO requires a CellDinoModel encoder in training_config")
+    if model.get("ckpt_path"):
+        raise ValueError("CELL-DINO frozen inference cannot also restore a Lightning checkpoint")
+    if encoder.get("init_args", {}).get("projection") is not None:
+        raise ValueError("Use a trained representation checkpoint for a CELL-DINO projection head")
+    encoder.setdefault("init_args", {})["weights_path"] = checkpoint
+    return config, None
+
+
 def infer(m, output):
     """Reuse the production prediction configuration generator, with explicit outputs."""
     from dynaclr.evaluation.evaluate import _generate_predict_yaml
     from dynaclr.evaluation.evaluate_config import EvaluationConfig
 
     cells = canonical_obs(pd.read_parquet(m["cell_index"]), m)
-    recipe = m.get("inference_recipe", "paper")
+    family = m.get("model_family", "dynaclr")
+    if family not in ("dynaclr", "dynacell", "cell_dino"):
+        raise ValueError("model_family must be dynaclr, dynacell or cell_dino")
+    recipe = m.get("inference_recipe", "paper" if family == "dynaclr" else "training")
+    if family == "cell_dino" and recipe != "training":
+        raise ValueError("CELL-DINO requires its training_config preprocessing recipe")
+    if recipe == "paper" and m.get("predict", {}).get("embedding_key", "features") != "features":
+        raise ValueError("The paper recipe exports features; use training for projection embeddings")
     if recipe not in ("paper", "training"):
         raise ValueError("inference_recipe must be paper or training")
     validate_cells(cells, "fov_statistics" if recipe == "paper" else "timepoint_statistics")
@@ -127,11 +156,12 @@ def infer(m, output):
         from dynaclr.evaluation.organelle_inference import predict_paper_cells
 
         destination = predict_paper_cells(cells, checkpoint, output, m.get("predict", {}).get("batch_size", 32))
-        return dict(m, embeddings=str(destination), inference_recipe="paper")
+        return dict(m, embeddings=str(destination), model_family=family, inference_recipe="paper")
+    training_cfg, lightning_checkpoint = prediction_model_config(m)
     config = EvaluationConfig.model_validate(
         dict(
             training_config=m["training_config"],
-            ckpt_path=str(checkpoint),
+            ckpt_path=lightning_checkpoint,
             cell_index_path=str(output / "cells.parquet"),
             output_dir=str(output),
             steps=["predict"],
@@ -139,7 +169,7 @@ def infer(m, output):
         )
     )
     (output / "configs").mkdir()
-    cfg = _generate_predict_yaml(config, yaml.safe_load(Path(m["training_config"]).read_text()), output)
+    cfg = _generate_predict_yaml(config, training_cfg, output)
     resolved = yaml.safe_load(cfg.read_text())
     if config.predict.num_workers == 0:
         resolved["data"]["init_args"]["prefetch_factor"] = None
@@ -151,8 +181,23 @@ def infer(m, output):
         if ((cells[axis] < half) | (cells[axis] + half > cells[axis.upper() + "_shape"])).any():
             raise ValueError("Cell crop crosses image boundary; filter boundary cells explicitly before inference")
     cfg.write_text(yaml.safe_dump(resolved, sort_keys=False))
-    subprocess.run(["viscy", "predict", "-c", str(cfg)], check=True)
-    m = dict(m, embeddings=str(output / "embeddings/embeddings.zarr"))
+    (output / "inference_recipe.json").write_text(
+        json.dumps(
+            dict(
+                name=recipe,
+                model_family=family,
+                checkpoint_sha256=m["checkpoint_sha256"],
+                training_config_sha256=sha256(m["training_config"]),
+                embedding_key=config.predict.embedding_key,
+                resolved_config="configs/predict.yml",
+            ),
+            indent=2,
+        )
+        + "\n"
+    )
+    executable = Path(sys.executable).with_name("viscy")
+    subprocess.run([str(executable) if executable.exists() else "viscy", "predict", "-c", str(cfg)], check=True)
+    m = dict(m, embeddings=str(output / "embeddings/embeddings.zarr"), model_family=family, inference_recipe=recipe)
     return m
 
 
@@ -330,14 +375,19 @@ def run(manifest, output, stage):
 
 
 def _run(manifest, output, stage):
+    requested_stage = stage
+    stage = {"embed": "infer", "phenotype": "analyze"}.get(stage, stage)
     if stage not in ("infer", "normalize", "plot", "analyze"):
         raise ValueError(f"Unknown stage: {stage}")
     m = load_manifest(manifest)
+    if requested_stage == "embed" and m.get("classifiers"):
+        raise ValueError("embed performs inference only; put classifiers in the phenotype manifest")
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "resolved_manifest.yaml").write_text(yaml.safe_dump(m))
     if stage == "infer":
         m = infer(m, output)
+        (output / "resolved_manifest.yaml").write_text(yaml.safe_dump(m))
     data = ad.read_zarr(m["embeddings"])
     if stage == "infer":
         cells = pd.read_parquet(output / "cells.parquet")
@@ -366,7 +416,8 @@ def _run(manifest, output, stage):
     existing_space = data.uns.get("organelle_feature_space")
     if existing_space is not None and existing_space != m["feature_space"]:
         raise ValueError("Embedding feature space mismatch")
-    classify(data, m)
+    if requested_stage != "embed":
+        classify(data, m)
     normalized = False
     if stage == "normalize":
         normalize_embeddings(data, m)
@@ -393,9 +444,9 @@ def _run(manifest, output, stage):
         schema_version=1,
         manifest=m,
         analysis=settings,
-        stage=stage,
+        stage=requested_stage,
         representation=settings.get("representation", "control_mad" if normalized else "encoder X"),
-        cohort="all treated observations",
+        cohort="supplied observations" if requested_stage == "embed" else "all treated observations",
         sampling_unit=settings.get("sampling_unit", "observation"),
         interval="subsampling stability; not biological replicate confidence",
         git_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -406,7 +457,7 @@ def _run(manifest, output, stage):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["infer", "normalize", "plot", "analyze"])
+    parser.add_argument("stage", choices=["embed", "phenotype", "infer", "normalize", "plot", "analyze"])
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()

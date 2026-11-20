@@ -1,0 +1,17 @@
+schema_version: 1
+root: .
+model_family: dynacell
+inference_recipe: training
+checkpoint: models/selected_representation.ckpt
+checkpoint_sha256: replace-with-checkpoint-sha256
+training_config: models/selected_training_config.yaml
+cell_index: cells.parquet
+feature_space: replace-with-checkpoint-preprocessing-and-output-identity
+control_label: uninfected
+predict:
+  batch_size: 32
+  num_workers: 0
+  precision: 32-true
+  embedding_key: features
+# Select projections only when the requested representation uses a trained projection head.
+# Use model_family: dynaclr and inference_recipe: paper for the verified paper encoder.

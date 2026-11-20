@@ -1,27 +1,58 @@
-# Organelle workflow contract v1
+# Embed and phenotype contract v1
 
 Start with the [workflow README](README.md) for the skill list, inputs and commands. This document specifies the detailed data contract.
 
-Skills live under `applications/dynaclr/skills/`; install or point your agent at their SKILL.md files. Run commands from the VisCy root. Sync the locked environment once (`uv sync --locked --package dynaclr --extra eval`); use `uv run --no-sync` during jobs.
+The two skills, `embed` and `phenotype`, live under `applications/dynaclr/skills/`.
+Point your agent at their SKILL.md files. Run commands from the VisCy root. Sync the locked environment once (`uv sync --locked --package dynaclr --extra eval`); use `uv run --no-sync` during jobs.
 
 A YAML manifest has `schema_version: 1`, `root` (relative to the manifest), `feature_space` (immutable encoder identity), `control_label`, and `embeddings` for normalization, plotting or cached analysis. AnnData X must contain raw encoder vectors; normalization never replaces X. Paths resolve against root. `columns` maps source column names to canonical names; `metadata` supplies explicit constants only for absent columns.
 
 Required observation fields: `cell_id` (unique cell/frame identity), `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. The composite experiment/cell_id/marker key is unique. Optional infection_state is an independent annotation; predicted_infection_state is classifier output. Track/lineage fields are optional and never synthesized. If HPI is absent, `timing: {interval_minutes: 30, first_frame_hpi: 3}` computes it from zero-based `t`. Do not combine experiments with different timing using one constant.
 
-Inference additionally requires `cell_index`, `checkpoint`, `checkpoint_sha256`, and the canonical viscy-data cell-index schema (one row per cell/frame/channel). Coordinates t/y/x are zero-based native image indices. well is the plate-relative well (e.g. A/2), and fov is its leaf name (e.g. fov0), so store_path/well/fov addresses the image position. T_shape/C_shape/Z_shape/Y_shape/X_shape dimensions are required. Image store paths, FOV, channel names, physical pixel sizes, focus and normalization metadata must agree with the training data loader. Supply AI-ready OME-Zarr; conversion and segmentation are upstream. Preserve absent tracking fields as null.
+The `embed` command additionally requires `cell_index`, `checkpoint` and `checkpoint_sha256`.
+The cell index must follow the viscy-data schema.
+Each row identifies one cell, frame and channel. Coordinates t/y/x are zero-based native image indices. well is the plate-relative well (e.g. A/2), and fov is its leaf name (e.g. fov0), so store_path/well/fov addresses the image position. T_shape/C_shape/Z_shape/Y_shape/X_shape dimensions are required. Image store paths, FOV, channel names, physical pixel sizes, focus and normalization metadata must agree with the training data loader. Supply AI-ready OME-Zarr; conversion and segmentation are upstream. Preserve absent tracking fields as null.
 
 `classifiers` is a list of trusted artifacts with path, sha256, feature_space, marker, task (e.g. infection_state), exposing predict/predict_proba and classes_ (or classifier.classes_). These may include preprocessing pipelines. Never load untrusted pickle/joblib. Predicted labels follow the saved model's decision rule; probability columns retain class labels. A classifier list can be omitted for already classified embeddings.
 
 `analysis` defaults: seed 42, min_cells 20, max_cells 180, permutations 200, repeats 50. Controls match experiment/control_group/exact HPI. The portable v1 preset samples observations and uses control-normalized PCA retaining 80% variance, with one fixed median bandwidth per marker. The explicit `normalize` step fits each marker/experiment/control group independently using only its own controls. It interpolates control medians over the HPI grid, smooths them with Gaussian sigma 1 (nearest boundary), subtracts those time-matched centers, and scales by `1.4826 * MAD` of the centered controls pooled across HPI, with a 1st-percentile positive-MAD floor. Controls at at least two HPI values per group are required; missing control groups or all-zero MAD fail normalization. This is the paper's time-matched recipe, not pooled-time global median/MAD. Centers, scales, control counts and cohort checksums are saved in `normalization.json` and `uns/organelle_normalization`. Set representation: raw to use encoder X, or sampling_unit: track_id / lineage_id to select one observation per temporal unit per exact HPI. Temporal sampling requires fov_name and the requested identity. The default cohort contains all treated cells. The paper reproduction command uses the archived onset-selected cohort and fitted representation; its numerical comparisons are recorded in [VALIDATION.md](VALIDATION.md). Insufficient matched cells at an HPI yield explicit status rows after normalization has passed. Curves are separate per experiment and treatment; replicate pooling is not performed.
 
+## Skill responsibilities
+
+`embed` performs inference and the selected checkpoint's image preprocessing.
+`phenotype` performs control-relative embedding normalization, PCA/UMAP plotting and MMD analysis.
+Image intensity normalization belongs to `embed`.
+Control median/MAD normalization of embedding vectors belongs to `phenotype`.
+
+Set `model_family: cell_dino` for frozen CELL-DINO weights.
+Supply a compatible `training_config` and a checksummed `.pth` checkpoint.
+The runner replaces the configuration's weights path with the verified checkpoint.
+It does not restore these weights as a Lightning checkpoint.
+
+Set `model_family: dynacell` for another DynaCell/DynaCLR representation checkpoint.
+Supply its matching `training_config` and checksummed Lightning checkpoint.
+The configuration must expose the VisCy embedding prediction interface.
+Set `predict.embedding_key: projections` for a trained projection-head representation.
+Record that selection in `feature_space`.
+
+The default `model_family: dynaclr` retains the paper recipe.
+The paper recipe exports encoder features.
+Checkpoint variants with different architectures or preprocessing require the training recipe.
+
+The `embed` command rejects classifier configurations.
+Supply optional compatible classifiers through `phenotype`.
+The existing `infer` command retains its optional classifier behavior for compatibility.
+The `phenotype` command runs the existing `analyze` implementation.
+The `normalize` and `plot` commands remain available as intermediate steps.
+
 ## Stages and saved representations
 
 | Stage | Embedding output | Additional outputs |
 | --- | --- | --- |
-| `infer` | `predictions.zarr`: raw encoder `X`. `embeddings.parquet`: metadata plus raw `embeddings` vectors. | Classifier labels/probabilities in observation metadata. |
+| `embed` / `infer` | `predictions.zarr`: raw encoder `X`. `embeddings.parquet`: metadata plus raw `embeddings` vectors. | `embed` exports raw vectors only. Legacy `infer` can also run classifiers. |
 | `normalize` | `normalized.zarr`: unchanged raw `X` plus normalized `obsm/X_control_mad`. `embeddings.parquet`: raw `embeddings` and normalized `ctrl-norm-embedding` vector columns. | `normalization.json`: fitted control parameters, recipe and source/output checksums. |
 | `plot` | `predictions.zarr` and `embeddings.parquet` preserve raw and normalized vectors. | Per-marker coordinate Parquet, PCA/UMAP PNG/PDF plots, PCA80 and UMAP joblib models. |
-| `analyze` | Same as `plot`; automatically fits and saves normalization when starting from raw data. | Plot outputs plus `mmd_curves.csv`, `mmd_samples.parquet` and MMD figures. |
+| `phenotype` / `analyze` | Same as `plot`; automatically fits and saves normalization when starting from raw data. | Plot outputs plus `mmd_curves.csv`, `mmd_samples.parquet` and MMD figures. |
 
 All stages write `predictions.parquet` (metadata/labels only), `resolved_manifest.yaml`, `provenance.json` and `artifacts.json`. Parquet embedding vectors are Arrow list columns; raw values preserve the source dtype and normalized vectors are float32. `observation_id` joins the vector table to the Zarr observation index. Coordinate tables carry the same index and canonical identity fields. Hashed figure stems avoid unsafe metadata filenames.
 

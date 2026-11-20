@@ -1,0 +1,16 @@
+schema_version: 1
+root: .
+model_family: cell_dino
+inference_recipe: training
+checkpoint: models/cell_dino.pth
+checkpoint_sha256: replace-with-checkpoint-sha256
+training_config: cell_dino_recipe.yaml
+cell_index: cells.parquet
+feature_space: replace-with-checkpoint-preprocessing-and-output-identity
+control_label: uninfected
+predict:
+  batch_size: 16
+  num_workers: 0
+  precision: 32-true
+  embedding_key: features
+# Supply canonical experiment, marker, control-group and timing metadata in cells.parquet.

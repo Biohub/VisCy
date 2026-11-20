@@ -258,3 +258,94 @@ def test_classifier_keeps_raw_feature_space_after_normalization(normalization_da
     ]
     classify(data, m)
     assert data.obs.loc[data.obs.marker.eq("M1"), "predicted_infection_state"].eq("uninfected").all()
+
+
+def test_cell_dino_uses_selected_weights_and_keeps_preprocessing(tmp_path):
+    import yaml
+
+    from dynaclr.evaluation.organelle_workflow import prediction_model_config
+
+    config = {
+        "model": {
+            "init_args": {
+                "encoder": {
+                    "class_path": "viscy_models.foundation.CellDinoModel",
+                    "init_args": {"weights_path": "old.pth", "img_size": 224},
+                }
+            }
+        },
+        "data": {"init_args": {"normalizations": [{"class_path": "selected_transform"}]}},
+    }
+    path = tmp_path / "recipe.yaml"
+    path.write_text(yaml.safe_dump(config))
+    selected = tmp_path / "selected.pth"
+    actual, lightning_checkpoint = prediction_model_config(
+        {
+            "model_family": "cell_dino",
+            "checkpoint": str(selected),
+            "training_config": str(path),
+        }
+    )
+    assert lightning_checkpoint is None
+    assert actual["model"]["init_args"]["encoder"]["init_args"]["weights_path"] == str(selected)
+    assert actual["data"] == config["data"]
+    assert yaml.safe_load(path.read_text()) == config
+    _, lightning_checkpoint = prediction_model_config(
+        {
+            "model_family": "dynacell",
+            "checkpoint": str(selected),
+            "training_config": str(path),
+        }
+    )
+    assert lightning_checkpoint == str(selected)
+
+
+def test_cell_dino_rejects_wrong_model_recipe(tmp_path):
+    import yaml
+
+    from dynaclr.evaluation.organelle_workflow import prediction_model_config
+
+    path = tmp_path / "recipe.yaml"
+    path.write_text(yaml.safe_dump({"model": {"init_args": {"encoder": {"class_path": "other.Encoder"}}}}))
+    with pytest.raises(ValueError, match="CellDinoModel"):
+        prediction_model_config({"model_family": "cell_dino", "checkpoint": "model.pth", "training_config": str(path)})
+
+
+def test_embed_rejects_classifiers_before_inference(tmp_path):
+    import yaml
+
+    from dynaclr.evaluation.organelle_workflow import run
+
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump({"schema_version": 1, "classifiers": [{"path": "classifier.joblib"}]}))
+    with pytest.raises(ValueError, match="inference only"):
+        run(path, tmp_path / "output", "embed")
+    assert not (tmp_path / "output").exists()
+
+
+def test_embed_exports_only_raw_vectors(normalization_data, tmp_path, monkeypatch):
+    import json
+
+    import anndata as ad
+    import yaml
+
+    from dynaclr.evaluation import organelle_workflow as workflow
+
+    data = normalization_data
+
+    def infer(m, output):
+        data.obs.to_parquet(output / "cells.parquet", index=False)
+        data.write_zarr(output / "source.zarr")
+        return dict(m, embeddings=str(output / "source.zarr"))
+
+    monkeypatch.setattr(workflow, "infer", infer)
+    monkeypatch.setattr(workflow, "classify", lambda *args: pytest.fail("embed must not invoke classification"))
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump({"schema_version": 1, "feature_space": "test-encoder"}))
+    output = tmp_path / "output"
+    workflow.run(path, output, "embed")
+    saved = ad.read_zarr(output / "predictions.zarr")
+    np.testing.assert_array_equal(saved.X, data.X)
+    assert "X_control_mad" not in saved.obsm
+    assert "ctrl-norm-embedding" not in pd.read_parquet(output / "embeddings.parquet")
+    assert json.loads((output / "provenance.json").read_text())["stage"] == "embed"
