@@ -1,0 +1,75 @@
+{
+  "comparison": "Fresh coordinate-only paper recipe versus archived embeddings",
+  "rtol": 0.0001,
+  "atol": 0.0005,
+  "minimum_cosine_required": 0.999999,
+  "datasets": [
+    {
+      "marker": "SEC61B",
+      "dataset": "07_01_SEC61B_TOMM20_G3BP1",
+      "cells": 16,
+      "max_absolute_error": 0.00019031018018722534,
+      "rmse": 3.590846245060675e-05,
+      "minimum_cosine": 0.9999998211860657,
+      "matches": true,
+      "source": "/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_07_01_A549_SEC61B_TOMM20_G3BP1_ZIKV/2-phenotyping/predictions/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/epoch105-step84800/embeddings/SEC61B.zarr",
+      "checkpoint": "/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/epoch=105-step=84800.ckpt"
+    },
+    {
+      "marker": "SEC61B",
+      "dataset": "03_24_SEC61B",
+      "cells": 16,
+      "max_absolute_error": 0.00018322467803955078,
+      "rmse": 3.700443630805239e-05,
+      "minimum_cosine": 0.9999999403953552,
+      "matches": true,
+      "source": "/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_03_24_A549_SEC61_ZIKV/2-phenotyping/predictions/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/epoch105-step84800/embeddings/SEC61B.zarr",
+      "checkpoint": "/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/epoch=105-step=84800.ckpt"
+    },
+    {
+      "marker": "G3BP1",
+      "dataset": "07_01_SEC61B_TOMM20_G3BP1",
+      "cells": 16,
+      "max_absolute_error": 0.00017559528350830078,
+      "rmse": 4.041773354401812e-05,
+      "minimum_cosine": 0.9999998211860657,
+      "matches": true,
+      "source": "/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_07_01_A549_SEC61B_TOMM20_G3BP1_ZIKV/2-phenotyping/predictions/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/epoch105-step84800/embeddings/G3BP1.zarr",
+      "checkpoint": "/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/epoch=105-step=84800.ckpt"
+    },
+    {
+      "marker": "G3BP1",
+      "dataset": "04_08_G3BP1",
+      "cells": 16,
+      "max_absolute_error": 0.00038298964500427246,
+      "rmse": 4.926751716993749e-05,
+      "minimum_cosine": 0.9999999403953552,
+      "matches": true,
+      "source": "/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_08_A549_G3BP1_ZIKV/2-phenotyping/predictions/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/epoch105-step84800/embeddings/G3BP1.zarr",
+      "checkpoint": "/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/epoch=105-step=84800.ckpt"
+    },
+    {
+      "marker": "TOMM20",
+      "dataset": "07_01_SEC61B_TOMM20_G3BP1",
+      "cells": 16,
+      "max_absolute_error": 0.00020766258239746094,
+      "rmse": 4.4074622564949095e-05,
+      "minimum_cosine": 0.9999999403953552,
+      "matches": true,
+      "source": "/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_07_01_A549_SEC61B_TOMM20_G3BP1_ZIKV/2-phenotyping/predictions/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/epoch105-step84800/embeddings/TOMM20.zarr",
+      "checkpoint": "/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/epoch=105-step=84800.ckpt"
+    },
+    {
+      "marker": "TOMM20",
+      "dataset": "04_10_TOMM20",
+      "cells": 16,
+      "max_absolute_error": 0.0003344714641571045,
+      "rmse": 4.254228406352922e-05,
+      "minimum_cosine": 0.9999998211860657,
+      "matches": true,
+      "source": "/hpc/projects/intracellular_dashboard/organelle_dynamics/2026_04_10_A549_TOMM20_ZIKV/2-phenotyping/predictions/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/epoch105-step84800/embeddings/TOMM20.zarr",
+      "checkpoint": "/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/epoch=105-step=84800.ckpt"
+    }
+  ],
+  "all_match": true
+}

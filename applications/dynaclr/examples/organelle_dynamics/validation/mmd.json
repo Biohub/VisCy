@@ -1,0 +1,24 @@
+{
+  "comparison": "Skill estimator versus archived HPI curves on identical frozen matched pairs",
+  "rows": 371,
+  "metric_checks": 3339,
+  "all_match": true,
+  "maximum_absolute_error": 2.842170943040401e-14,
+  "rtol": 1e-05,
+  "atol": 1e-06,
+  "cohort_checks": [
+    "counts",
+    "paired dataset",
+    "paired exact HPI",
+    "unique lineage per bin"
+  ],
+  "inputs": {
+    "mmd_curves.csv": "16b9a22464c56400b6bda2d8a15a547924da3f100810d8ab50675cb933f25754",
+    "mmd_point_sample_manifest.parquet": "5eff1f37fd8180124a0d176e49a3934e851f395f1f85d6856b062460c0b59359",
+    "run_info.json": "5c95a0624d7d5b5e2276581a0e65a3f309778e1518b0a23346b0f12d5ee17b7d",
+    "tomm20_pca80_scores.npy": "4ad91d264a94831d7f62fbac78e2f240f071e5189b1b3acc1564c387eedbe1af",
+    "sec61b_pca80_scores.npy": "92e7407cc51fb28e12590ff3c111c2d8a90d4edeb073a039a85862e8a6600e95",
+    "g3bp1_pca80_scores.npy": "7ad36082249f1ad47dfa6d890b3e8007a695978d8bf49718ed9fb81368ba1ba4"
+  },
+  "estimator_sha256": "427ec51f3d1bf0908b2362601b157dc15559190957acd37c6ba536d9959fc475"
+}

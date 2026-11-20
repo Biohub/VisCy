@@ -459,6 +459,7 @@ class MultiExperimentTripletDataset(Dataset):
         else:
             # Build per-sample index dicts via NumPy column arrays (no .iterrows).
             all_cols = list(ULTRACK_INDEX_COLUMNS) + [
+                "cell_id",
                 "experiment",
                 "marker",
                 "perturbation",

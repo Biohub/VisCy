@@ -1,0 +1,20 @@
+schema_version: 1
+root: .
+feature_space: replace-with-encoder-sha256
+embeddings: embeddings.zarr
+control_label: uninfected
+columns:
+  source_cell_id: cell_id
+metadata:
+  control_group: acquisition-1
+  replicate: biological-replicate-1
+# Supply experiment/marker/perturbation per observation, not inferred from paths.
+timing:
+  interval_minutes: 30
+  first_frame_hpi: 3
+analysis:
+  seed: 42
+  min_cells: 20
+  max_cells: 180
+  permutations: 200
+  repeats: 50

@@ -1,0 +1,26 @@
+# Frozen CELL-DINO image preprocessing for the embed skill.
+# The embed manifest supplies the verified weights and cell-index paths.
+model:
+  class_path: dynaclr.engine.ContrastiveModule
+  init_args:
+    encoder:
+      class_path: viscy_models.foundation.cell_dino.CellDinoModel
+      init_args:
+        weights_path: supplied-by-embed-manifest.pth
+        img_size: 224
+        patch_size: 16
+        freeze: true
+        projection: null
+data:
+  class_path: dynaclr.data.datamodule.MultiExperimentDataModule
+  init_args:
+    cell_index_path: supplied-by-embed-manifest.parquet
+    z_window: 1
+    yx_patch_size: [256, 256]
+    final_yx_patch_size: [160, 160]
+    channels_per_sample: 1
+    focus_channel: null
+    reference_pixel_size_xy_um: null
+    reference_pixel_size_z_um: null
+    # CellDinoModel applies resize and per-image spatial z-score normalization.
+    normalizations: []

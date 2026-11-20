@@ -1,0 +1,25 @@
+{
+  "cell_dino": {
+    "model": "CELL-DINO",
+    "shape": [
+      2,
+      1024
+    ],
+    "finite": true,
+    "raw_parquet_exact": true,
+    "no_classifier_outputs": true
+  },
+  "phenotype": {
+    "observations": 192,
+    "mmd_rows": 3,
+    "mmd_exact": true,
+    "raw_vectors_exact": true,
+    "normalized_parquet_exact": true,
+    "png_count": 5
+  },
+  "cell_dino_manifest": "/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/embed-phenotype-2026-11-20-v3/cell_dino.yaml",
+  "phenotype_manifest": "/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/phenotype-skill-2026-11-20.yaml",
+  "cell_dino_output": "/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/embed-phenotype-2026-11-20-v3/cell_dino",
+  "phenotype_output": "/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/phenotype-skill-2026-11-20",
+  "scope": "Command integration and output integrity; not CELL-DINO biological validation or complete Figure 6 reproduction."
+}
