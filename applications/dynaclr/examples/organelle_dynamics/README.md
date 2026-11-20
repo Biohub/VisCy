@@ -1,114 +1,153 @@
-# Organelle dynamics: inference and analysis
+# Organelle dynamics workflow
 
-Run the organelle dynamics workflow on the paper data or your own microscopy data. Separate inference, normalization, plotting and analysis skills connect image inference to infection-colored embedding plots and control-versus-treated population comparisons over hours post infection (HPI).
+Run inference, control normalization, plotting and population analysis on paper data or external microscopy data.
+This workflow uses DynaCLR checkpoints and optional saved classifiers.
 
-```text
-Images + cell coordinates + metadata + pretrained models
-                         │
-                 organelle-inference
-                         │
-          Raw embeddings + classifier predictions
-                         │
-                organelle-normalization
-                         │
-      Raw + own-control median/MAD normalized embeddings
-                         │
-                 organelle-plotting
-                         │
-                  PCA/UMAP plots
+## Skills
 
-Normalized embeddings → organelle-analysis → plots + MMD per HPI
-```
+| Skill | Required inputs | Outputs |
+| --- | --- | --- |
+| [organelle-inference](../../skills/organelle-inference/SKILL.md) | Images, cell-coordinate Parquet, metadata, encoder checkpoint and checksum. Optional classifier models. | Raw embeddings and classifier predictions. |
+| [organelle-normalization](../../skills/organelle-normalization/SKILL.md) | Raw embeddings, metadata and the dataset's own controls. | Normalized embeddings, preserved raw embeddings and fitted control parameters. |
+| [organelle-plotting](../../skills/organelle-plotting/SKILL.md) | Normalized embeddings and available infection labels. | PCA/UMAP coordinates, figures and fitted models. |
+| [organelle-analysis](../../skills/organelle-analysis/SKILL.md) | Embeddings and experiment, control and timing metadata. | PCA/UMAP figures and control-versus-treated MMD curves. |
 
-You can start at normalization if you already have compatible raw embeddings. Segmentation and tracking are upstream: per-frame cell coordinates suffice for inference and population analysis. Tracking is required only when explicitly selecting track/lineage sampling. Time alignment is planned as a separate skill.
+Cell coordinates are sufficient for inference and population analysis.
+Track or lineage sampling requires genuine track or lineage identifiers.
 
-## Skills and inputs
+## Required resources
 
-| Skill | What it does | Required inputs | Main outputs |
-| --- | --- | --- | --- |
-| [organelle-inference](../../skills/organelle-inference/SKILL.md) | Extract embeddings from cell-centered image crops and optionally apply saved classifiers. | AI-ready OME-Zarr images with normalization metadata; cell-coordinate Parquet; experiment metadata; encoder checkpoint and SHA-256; the paper inference recipe (default), or a resolved training configuration for the explicit training recipe. For new infection/remodeling predictions, provide compatible classifier artifacts and hashes. | `predictions.zarr` with raw encoder X; `embeddings.parquet` with raw vectors; `predictions.parquet` with labels/metadata; provenance. |
-| [organelle-normalization](../../skills/organelle-normalization/SKILL.md) | Fit time-matched control medians and control MAD separately per marker, experiment and control group. | Raw embeddings, canonical metadata and the dataset's own controls at two or more HPI values per group. | `normalized.zarr` preserving raw X and adding `obsm/X_control_mad`; raw and normalized vectors in `embeddings.parquet`; fitted parameters in `normalization.json`. |
-| [organelle-plotting](../../skills/organelle-plotting/SKILL.md) | Fit PCA80 → UMAP and plot treatment and available infection labels. | `normalized.zarr`, matching metadata and control label. | Per-marker coordinates, PCA/UMAP PNG/PDF plots and fitted models. |
-| [organelle-analysis](../../skills/organelle-analysis/SKILL.md) | Plot embeddings by treatment and available infection labels; compare all treated cells with matched controls per HPI. | Normalized AnnData embeddings; experiment/control/timing metadata; infection annotations or saved predictions for infection-colored plots. Classifier artifacts are needed only if generating new predictions. | PCA/UMAP coordinates and PNG/PDF plots; `mmd_curves.csv`, `mmd_samples.parquet`, MMD figures and provenance. |
-
-Treatment condition, annotated infection state, predicted infection state, and remodeling predictions remain separate fields. MMD uses **all treated cells**, independently of predicted infection state, and matches controls by experiment, control group and exact HPI.
-
-## What to prepare
-
-| Input | Required information |
+| Resource | Requirements |
 | --- | --- |
-| Experiment metadata | `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, and `hours_post_perturbation`. HPI can instead be derived from frame `t`, acquisition interval and first-frame HPI. |
-| Observation identities | `cell_id` identifies a cell at a frame. The combination of experiment, cell ID and marker must be unique. |
-| Cell-coordinate Parquet — inference only | One row per cell/frame/channel in the VisCy cell-index format: source store, well, FOV, channel, native pixel coordinates and frame, image dimensions, physical pixel sizes, and required schema fields. Keep absent tracking fields null. See the [full contract](CONTRACT.md). |
-| Images — inference only | AI-ready OME-Zarr with FOV normalization and focus metadata for the paper recipe. Image dimensions and channel names must agree with the cell index. Crops crossing an image boundary are rejected. |
-| Models — inference/classification | Pinned encoder checkpoint, an explicit inference recipe, and optional classifier joblib pipelines. The default paper recipe uses FOV mean/std normalization, a focus-centered 16-slice window, physical pixel-size rescaling, and 160 × 160 model crops. Classifiers must match the encoder feature space and marker. |
-| Manifest | YAML tying these inputs together, with `schema_version: 1`, a root for relative paths, feature-space identity and the control label. See the [analysis template](manifest.yaml). |
+| Software | VisCy revision and `uv.lock`. |
+| Images | AI-ready OME-Zarr with channel, pixel-size, focus and normalization metadata. Required for inference. |
+| Cell-coordinate Parquet | Source image paths, cell identifiers, frames, coordinates, channels, image dimensions and physical pixel sizes. Required for inference. |
+| Encoder | DynaCLR checkpoint, SHA-256 checksum and inference recipe. |
+| Classifiers | Trusted model files, checksums, marker and feature-space identity. Required for new classifier predictions. |
+| Metadata | `cell_id`, `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. |
+| Manifest | YAML input paths, metadata mappings, control label and analysis settings. See the [template](manifest.yaml). |
 
-For external data, use the manifest's `columns` mapping to rename metadata fields and `metadata` to supply constants for absent fields. Explicitly supply the infection-time reference; it is not inferred from folder names. Different experiment timings require correctly computed per-observation HPI.
+The experiment, cell identifier and marker combination must be unique.
+Use `columns` to rename external metadata fields.
+Use `metadata` to supply constants for absent fields.
+Supply physical timing explicitly.
+
+The [input/output contract](CONTRACT.md) specifies coordinate fields, inference recipes, classifier requirements and output formats.
 
 ## Run the workflow
 
-Run from the VisCy repository root. Set up the environment once:
+Run commands from the VisCy repository root.
+Install the locked environment once:
 
 ```bash
 uv sync --locked --package dynaclr --extra eval
 ```
 
-Use a new output directory for every run. Point your agent at the linked `SKILL.md`, or run the same underlying commands directly:
+Use a new output directory for each command.
 
 ```bash
-# Images and coordinates → embeddings and optional classifier predictions
+# Extract raw embeddings and optional classifier predictions.
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow infer \
   --manifest inference.yaml --output results/inference
 
-# Raw embeddings → control median/MAD normalized embeddings
+# Normalize embeddings against the dataset's own controls.
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow normalize \
   --manifest normalize.yaml --output results/normalized
 
-# Normalized embeddings → PCA/UMAP plots (without MMD)
+# Generate PCA/UMAP figures.
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow plot \
   --manifest analysis.yaml --output results/plots
 
-# Normalized embeddings → plots and MMD tables
+# Generate figures and MMD tables.
 uv run --no-sync python -m dynaclr.evaluation.organelle_workflow analyze \
   --manifest analysis.yaml --output results/analysis
 ```
 
-For normalization, set `embeddings` in `normalize.yaml` to the inference output's `predictions.zarr`. For plotting and analysis, set it in `analysis.yaml` to `results/normalized/normalized.zarr`. Preserve the same metadata and control label. Remove the `classifiers` list if predictions already exist; classifiers always consume raw encoder X. Paths resolve relative to the manifest's `root`, so adjust that root when moving a bundle. The supplied template is for analysis; inference adds `cell_index`, `checkpoint`, and `checkpoint_sha256`. It defaults to `inference_recipe: paper`; `inference_recipe: training` additionally requires `training_config`. See the [contract](CONTRACT.md).
+| Manifest | Input configuration |
+| --- | --- |
+| `inference.yaml` | Set `cell_index`, `checkpoint` and `checkpoint_sha256`. The default recipe is `paper`. |
+| `normalize.yaml` | Set `embeddings` to `results/inference/predictions.zarr`. |
+| `analysis.yaml` | Set `embeddings` to `results/normalized/normalized.zarr`. |
 
-Normalization preserves raw embeddings and exports two distinct Parquet vector columns: `embeddings` (raw) and `ctrl-norm-embedding` (normalized). It fits the current input cohort's controls independently for each marker/experiment/control group. The fit parameters, source checksum and normalized checksum are saved. Plotting rejects missing or stale normalization; rerun `normalize` after changing the cohort, controls or raw vectors. The combined `analyze` command also accepts raw input and saves its normalization before computing plots and MMD.
+Paths resolve against the manifest's `root`.
+Keep the metadata and control label consistent across stages.
+Remove `classifiers` when predictions already exist.
+The explicit `training` inference recipe also requires `training_config`.
 
-Analysis defaults to control-normalized PCA retaining 80% variance for MMD, with a fixed bandwidth per marker. UMAP is used only for visualization. Optional `analysis.representation: raw` uses raw embeddings; `analysis.sampling_unit: track_id` or `lineage_id` requires genuine temporal identities and `fov_name`. Subsampling bands describe stability, not biological-replicate confidence intervals.
+## Saved embeddings and predictions
 
-## Start with the paper data
+| Output | Contents |
+| --- | --- |
+| `predictions.zarr` | Raw encoder `X`, metadata and classifier predictions. Plotting and normalized analysis also retain `obsm/X_control_mad`. |
+| `normalized.zarr` | Raw encoder `X` and normalized `obsm/X_control_mad`. |
+| `embeddings.parquet` | Raw `embeddings` vectors. Normalized runs also include `ctrl-norm-embedding` vectors. |
+| `predictions.parquet` | Metadata, classifier labels and probabilities. |
+| `normalization.json` | Fitted control parameters and source/output checksums. |
 
-`PREDICTION_ROOT` below is the existing `epoch105-step84800` prediction directory containing `embeddings/` and `classifier/`, not the downstream `paper_figure_pseudotime/` directory.
+Normalization fits each marker, experiment and control group separately.
+Each group requires controls at two or more HPI values.
+HPI means hours post infection in the paper data.
+The method uses smoothed control medians and median absolute deviation (MAD) scaling.
+Classifiers use raw encoder embeddings.
+
+Plotting checks the saved normalization against the input data.
+Run normalization again after changing the cell population, controls or raw embeddings.
+The combined `analyze` command also accepts raw embeddings and saves their normalization.
+
+MMD measures differences between populations.
+The default analysis compares all treated cells with controls at the same experiment, control group and HPI.
+Treatment labels, infection annotations and classifier predictions occupy separate fields.
+
+PCA retains 80% of normalized feature variance by default.
+MMD uses these PCA features.
+UMAP provides visualization coordinates.
+Subsampling intervals describe stability, not biological replicate confidence.
+
+## Paper resources
+
+The [resource list](CONTRACT.md#artifact-inventory) identifies checkpoints, configurations, classifier models and cached embeddings.
+Set `PREDICTION_ROOT` to the paper's `epoch105-step84800` directory containing `embeddings/` and `classifier/`.
 
 ```bash
-# List available local paper artifacts and file checksums
+# List local resources and file checksums.
 uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/build_paper_inventory.py \
   --prediction-root "$PREDICTION_ROOT" --output paper_inventory.json
 
-# Analyze a small real SEC61B cohort with the saved infection classifier
+# Run a small SEC61B analysis with a saved infection classifier.
 uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/smoke_paper.py \
   --prediction-root "$PREDICTION_ROOT" --output results/paper-smoke
 ```
 
-The [artifact inventory section](CONTRACT.md#artifact-inventory) identifies the paper checkpoint, configuration, classifiers, embeddings and teacher-label Parquet dependencies. The inventory records the available asset locations and file checksums; supply these paths through your manifest.
+The inventory records local resource paths and file checksums.
+Image paths and cell-coordinate Parquet paths also appear in the run manifests.
+The inventory has no public download locations.
 
-## Publication comparison
+## Validation
 
-The workflow was checked against the archived paper data across SEC61B, TOMM20 and G3BP1. The comparison identified and corrected the inference normalization/crop recipe, the MMD null standard deviation (`ddof=1`), and matched-pair subsampling.
+The [validation report](VALIDATION.md) contains comparison methods, tolerances, saved results and rerun commands.
 
-| Comparison | Result |
+| Check | Recorded result |
 | --- | --- |
-| Fresh coordinate-only inference | 96 cells across six marker/dataset pairs agree with archived embeddings within float32 tolerance (`atol=5e-4`, `rtol=1e-4`); maximum absolute difference 3.83e-4. |
-| Saved infection classifiers | 96/96 labels agree; maximum probability difference 0.0002074. |
-| Control normalization and cached PCA transforms | Exact agreement across 257,856 observations. |
-| Paper HPI MMD, uncertainty bands and permutation p-values | All 3,339 metric comparisons passed across 371 bins; maximum absolute difference 2.85e-14. |
-| Explicit normalize → plot/analyze sequence | 192 cells: exact raw-vector preservation, normalized Parquet/Zarr agreement, plotting coordinates, classifier predictions and previous MMD tables. |
-| Matched cohorts | Counts, dataset/HPI pairing and unique lineage membership checked for every reference bin. |
+| Fresh inference | 96 cells across six marker/dataset pairs match within float32 tolerance. Maximum absolute difference: 0.000383. |
+| Infection classifiers | 96/96 labels match. Maximum probability difference: 0.0002074. |
+| Normalization and cached PCA | Exact agreement across 257,856 observations. |
+| Paper MMD | 3,339 comparisons pass across 371 HPI bins. Maximum absolute difference: 2.85e-14. |
+| Separate normalization and plotting | 192 cells retain exact raw vectors, normalized exports, plotting coordinates, classifier predictions and previous MMD results. |
+| Regression checks | 16 tests and four skill validators pass. |
 
-See the [validation report and rerun commands](VALIDATION.md) for measured results, tolerances and machine-readable evidence. All generated comparison outputs are under `/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/publication-validation/`.
+Paper comparisons use the saved cell population, PCA models, matched samples and random seeds.
+The default workflow compares all treated cells.
 
-The default analysis compares all treated cells. To reproduce the paper's plotted cohort, the verification command uses its frozen onset-selected lineages, matched samples, PCA scores, bandwidths and random seeds. These are explicit cohort choices: use the same cohort and fitted representation when comparing numerical curves. The checks establish computational reproduction on the paper data; infection annotations and classifier predictions remain distinct outputs. Time alignment remains a separate workflow.
+Validation outputs:
+
+```text
+/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/publication-validation/
+```
+
+## Proposed changes
+
+The proposed names are `dynacell-embedding` and `dynacell-profiling`.
+Consolidation remains undecided.
+CELL-DINO selection and separate witness scores and predictions are proposed additions to this workflow.
+The four skills listed above remain the implemented interface.
+Temporal alignment is outside this workflow.
