@@ -1,43 +1,36 @@
 ---
 name: phenotype
-description: Normalize cell embeddings against matched controls and generate UMAP plots and MMD comparisons of population shifts.
+description: Normalize embeddings against matched controls and generate UMAP plots and MMD comparisons of population shifts.
 ---
 
-Read the [input/output contract](../../examples/organelle_dynamics/CONTRACT.md).
-Set `embeddings` to the embed output's predictions.zarr.
-Supply the control label and experiment, marker, control-group and timing metadata.
+Read the [analysis contract](../../examples/organelle_dynamics/CONTRACT.md#analysis).
+Set `embeddings` to the embed output's `predictions.zarr`.
 
-```sh
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow phenotype --manifest phenotype.yaml --output new-phenotype-directory
+```mermaid
+flowchart LR
+    R["Raw embeddings"] --> N["Control median / MAD normalization"]
+    C["Control groups + HPI"] --> N
+    N --> P["PCA: 80% variance"]
+    P --> U["UMAP figures"]
+    P --> M["MMD per HPI"]
+    C --> M
+    R -.-> K["Optional compatible classifier"]
+    K -. "labels for coloring" .-> U
 ```
 
-The command saves control-normalized embeddings, fits PCA80, generates UMAP plots and calculates MMD per physical HPI.
-PCA80 retains at least 80% of feature variance.
+```sh
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow phenotype --manifest phenotype.yaml --output results/phenotype
+```
 
-Use each marker, experiment and control group's own controls for median/MAD normalization.
-The current time-matched recipe requires controls at two or more HPI values per group.
-Preserve raw encoder embeddings alongside normalized embeddings.
-Keep normalization parameters and checksums with the output.
-Refit normalization after changing controls or the observation population.
-
-Use all treated observations for population comparisons.
-Match controls by experiment, control group and exact HPI.
-Keep different model feature spaces separate.
-Use PCA features for MMD.
-Use UMAP coordinates for visualization.
+Use each marker, experiment and control group's own controls.
+Require controls at two or more HPI values per group.
+Preserve raw embeddings alongside normalized embeddings.
+Compare all treated cells with matched controls, independently of classifier predictions.
+Keep model feature spaces separate.
 Report insufficient-cell status rows.
 Describe subsampling bands as stability intervals.
 
-Optional saved classifiers consume their compatible raw feature space.
-Supply trusted classifier files with matching marker, feature-space identity and checksums.
-Keep treatment, supplied infection annotations and classifier predictions separate.
-The runner does not currently produce witness scores or witness predictions.
-
-Use the normalize command to save normalization separately.
-Use the plot command to generate figures without MMD.
-These commands are workflow steps, not separate skills.
-Tracking is optional unless selecting track or lineage sampling.
-Temporal alignment is outside this skill.
-
-See [validation](../../examples/organelle_dynamics/VALIDATION.md) for component comparisons.
-Those checks do not establish complete Figure 6 reproduction.
+Optional trusted classifiers consume compatible raw embeddings.
+Keep treatment, annotation and prediction fields separate.
+Use `normalize` or `plot` commands when only an intermediate output is needed.
+Witness scoring and temporal alignment are outside this skill.

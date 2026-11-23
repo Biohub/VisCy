@@ -1,84 +1,116 @@
-# Embed and phenotype contract v1
+# Input and output contract
 
-Start with the [workflow README](README.md) for the skill list, inputs and commands. This document specifies the detailed data contract.
+Use the [start page](README.md) for commands and file navigation.
 
-The two skills, `embed` and `phenotype`, live under `applications/dynaclr/skills/`.
-Point your agent at their SKILL.md files. Run commands from the VisCy root. Sync the locked environment once (`uv sync --locked --package dynaclr --extra eval`); use `uv run --no-sync` during jobs.
+## Inputs
 
-A YAML manifest has `schema_version: 1`, `root` (relative to the manifest), `feature_space` (immutable encoder identity), `control_label`, and `embeddings` for normalization, plotting or cached analysis. AnnData X must contain raw encoder vectors; normalization never replaces X. Paths resolve against root. `columns` maps source column names to canonical names; `metadata` supplies explicit constants only for absent columns.
+| Input | Required fields or contents |
+| --- | --- |
+| Manifest | `schema_version: 1`, `root`, `feature_space`, `control_label`. |
+| Observation metadata | `cell_id`, `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. |
+| Embed inputs | `cell_index`, `checkpoint`, `checkpoint_sha256`, model selection and image preprocessing settings. |
+| Phenotype input | `embeddings`: AnnData Zarr with raw vectors in `X` and observation metadata in `obs`. |
+| Optional classifiers | Trusted files with `path`, `sha256`, `feature_space`, `marker` and `task`. |
 
-Required observation fields: `cell_id` (unique cell/frame identity), `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. The composite experiment/cell_id/marker key is unique. Optional infection_state is an independent annotation; predicted_infection_state is classifier output. Track/lineage fields are optional and never synthesized. If HPI is absent, `timing: {interval_minutes: 30, first_frame_hpi: 3}` computes it from zero-based `t`. Do not combine experiments with different timing using one constant.
+Paths resolve against `root`, relative to the manifest location.
+The experiment, cell identifier and marker combination must be unique.
+Use `columns` for source-to-canonical field mappings.
+Use `metadata` for constants in absent fields.
 
-The `embed` command additionally requires `cell_index`, `checkpoint` and `checkpoint_sha256`.
-The cell index must follow the viscy-data schema.
-Each row identifies one cell, frame and channel. Coordinates t/y/x are zero-based native image indices. well is the plate-relative well (e.g. A/2), and fov is its leaf name (e.g. fov0), so store_path/well/fov addresses the image position. T_shape/C_shape/Z_shape/Y_shape/X_shape dimensions are required. Image store paths, FOV, channel names, physical pixel sizes, focus and normalization metadata must agree with the training data loader. Supply AI-ready OME-Zarr; conversion and segmentation are upstream. Preserve absent tracking fields as null.
+HPI means hours post infection in the paper data.
+The general field is `hours_post_perturbation`.
+When absent, `timing` computes it from `t * interval_minutes / 60 + first_frame_hpi`.
+Supply timing per observation when experiments use different time references.
 
-`classifiers` is a list of trusted artifacts with path, sha256, feature_space, marker, task (e.g. infection_state), exposing predict/predict_proba and classes_ (or classifier.classes_). These may include preprocessing pipelines. Never load untrusted pickle/joblib. Predicted labels follow the saved model's decision rule; probability columns retain class labels. A classifier list can be omitted for already classified embeddings.
+Cell-coordinate Parquet must follow the [viscy-data schema](../../../../packages/viscy-data/src/viscy_data/cell_index.py).
+Each row identifies one cell, frame and channel.
+Coordinates use zero-based native image indices.
+`store_path/well/fov` identifies the OME-Zarr position.
+Image dimensions, channels, pixel sizes, focus and normalization metadata must agree with the source images.
+Keep absent biological track identifiers null.
 
-`analysis` defaults: seed 42, min_cells 20, max_cells 180, permutations 200, repeats 50. Controls match experiment/control_group/exact HPI. The portable v1 preset samples observations and uses control-normalized PCA retaining 80% variance, with one fixed median bandwidth per marker. The explicit `normalize` step fits each marker/experiment/control group independently using only its own controls. It interpolates control medians over the HPI grid, smooths them with Gaussian sigma 1 (nearest boundary), subtracts those time-matched centers, and scales by `1.4826 * MAD` of the centered controls pooled across HPI, with a 1st-percentile positive-MAD floor. Controls at at least two HPI values per group are required; missing control groups or all-zero MAD fail normalization. This is the paper's time-matched recipe, not pooled-time global median/MAD. Centers, scales, control counts and cohort checksums are saved in `normalization.json` and `uns/organelle_normalization`. Set representation: raw to use encoder X, or sampling_unit: track_id / lineage_id to select one observation per temporal unit per exact HPI. Temporal sampling requires fov_name and the requested identity. The default cohort contains all treated cells. The paper reproduction command uses the archived onset-selected cohort and fitted representation; its numerical comparisons are recorded in [VALIDATION.md](VALIDATION.md). Insufficient matched cells at an HPI yield explicit status rows after normalization has passed. Curves are separate per experiment and treatment; replicate pooling is not performed.
+## Models
 
-## Skill responsibilities
+| Selection | Configuration |
+| --- | --- |
+| Paper DynaCLR | `model_family: dynaclr`, `inference_recipe: paper`. |
+| Other DynaCell/DynaCLR representation checkpoint | `model_family: dynacell`, `inference_recipe: training`, matching `training_config`. |
+| Frozen CELL-DINO | `model_family: cell_dino`, [cell_dino_recipe.yaml](cell_dino_recipe.yaml), local `.pth` checkpoint. |
 
-`embed` performs inference and the selected checkpoint's image preprocessing.
-`phenotype` performs control-relative embedding normalization, PCA/UMAP plotting and MMD analysis.
-Image intensity normalization belongs to `embed`.
-Control median/MAD normalization of embedding vectors belongs to `phenotype`.
+The paper recipe uses FOV mean/std normalization and 160-pixel crops.
+It uses Phase3D focus, a 16-slice reference window, offset 0.3 and fluorescence maximum-intensity projection.
+Reference sampling is 0.1494 µm in XY and 0.174 µm in Z.
+The runner rounds coordinates to native pixels and rejects excluded observations.
 
-Set `model_family: cell_dino` for frozen CELL-DINO weights.
-Supply a compatible `training_config` and a checksummed `.pth` checkpoint.
-The runner replaces the configuration's weights path with the verified checkpoint.
-It does not restore these weights as a Lightning checkpoint.
+Training configurations must expose the VisCy embedding prediction interface.
+CELL-DINO loads the verified checkpoint through `weights_path`.
+Its wrapper resizes images and applies per-image, per-channel spatial z-score normalization.
+Set `predict.embedding_key: projections` only for a trained projection-head representation through the training recipe.
+Record checkpoint, preprocessing and representation selection in `feature_space`.
 
-Set `model_family: dynacell` for another DynaCell/DynaCLR representation checkpoint.
-Supply its matching `training_config` and checksummed Lightning checkpoint.
-The configuration must expose the VisCy embedding prediction interface.
-Set `predict.embedding_key: projections` for a trained projection-head representation.
-Record that selection in `feature_space`.
+`embed` rejects classifiers.
+Phenotype classifiers must expose `predict`, `predict_proba` and class labels.
+They use compatible raw embeddings.
 
-The default `model_family: dynaclr` retains the paper recipe.
-The paper recipe exports encoder features.
-Checkpoint variants with different architectures or preprocessing require the training recipe.
+## Analysis
 
-The `embed` command rejects classifier configurations.
-Supply optional compatible classifiers through `phenotype`.
-The existing `infer` command retains its optional classifier behavior for compatibility.
-The `phenotype` command runs the existing `analyze` implementation.
-The `normalize` and `plot` commands remain available as intermediate steps.
+Normalization fits controls independently for each marker, experiment and control group.
+It requires controls at two or more HPI values per group.
+It interpolates control medians across HPI and smooths them with Gaussian sigma 1 using nearest boundaries.
+It subtracts these centers and scales by `1.4826 * MAD` of control residuals across HPI.
+The scale floor is the first percentile of positive MAD values.
+Missing controls or all-zero MAD values fail normalization.
 
-## Stages and saved representations
+PCA fits each marker separately and retains at least 80% of variance.
+Conditions and timepoints share that marker's fit.
+MMD compares all treated cells with controls from the same experiment, control group and exact HPI.
+It uses one median bandwidth per marker.
+UMAP provides visualization coordinates only.
 
-| Stage | Embedding output | Additional outputs |
-| --- | --- | --- |
-| `embed` / `infer` | `predictions.zarr`: raw encoder `X`. `embeddings.parquet`: metadata plus raw `embeddings` vectors. | `embed` exports raw vectors only. Legacy `infer` can also run classifiers. |
-| `normalize` | `normalized.zarr`: unchanged raw `X` plus normalized `obsm/X_control_mad`. `embeddings.parquet`: raw `embeddings` and normalized `ctrl-norm-embedding` vector columns. | `normalization.json`: fitted control parameters, recipe and source/output checksums. |
-| `plot` | `predictions.zarr` and `embeddings.parquet` preserve raw and normalized vectors. | Per-marker coordinate Parquet, PCA/UMAP PNG/PDF plots, PCA80 and UMAP joblib models. |
-| `phenotype` / `analyze` | Same as `plot`; automatically fits and saves normalization when starting from raw data. | Plot outputs plus `mmd_curves.csv`, `mmd_samples.parquet` and MMD figures. |
+| Setting | Default |
+| --- | --- |
+| `seed` | 42 |
+| `min_cells` / `max_cells` | 20 / 180 |
+| `permutations` / `repeats` | 200 / 50 |
+| `representation` | `control_pca80`; `raw` selects unnormalized encoder vectors. |
+| `sampling_unit` | `observation`; `track_id` or `lineage_id` requires genuine identifiers and `fov_name`. |
 
-All stages write `predictions.parquet` (metadata/labels only), `resolved_manifest.yaml`, `provenance.json` and `artifacts.json`. Parquet embedding vectors are Arrow list columns; raw values preserve the source dtype and normalized vectors are float32. `observation_id` joins the vector table to the Zarr observation index. Coordinate tables carry the same index and canonical identity fields. Hashed figure stems avoid unsafe metadata filenames.
+Insufficient matched cells produce explicit status rows.
+Subsampling intervals describe stability, not biological replicate confidence.
+Treatment, infection annotations and classifier predictions remain separate.
 
-Point the normalization manifest's `embeddings` at inference's `predictions.zarr`; point plotting/analysis manifests at `normalized.zarr`. Preserve metadata, `feature_space` and `control_label`. Remove classifiers to avoid recomputation; if supplied, they still run on raw X. Normalization always starts from raw X, including when rerun on normalized bundles. Plotting validates the saved source/normalized checksums and rejects stale or absent normalization. Changing the cohort requires an explicit normalization refit. The combined `analyze` command reuses valid saved normalization and fits it for raw inputs without a workflow normalization contract.
+## Outputs
 
-PCA80 and seeded UMAP are fitted separately per marker using the saved normalized vectors. Conditions and timepoints share a fit within each marker; different markers' coordinates are separate spaces. This paper workflow uses 2D UMAP after PCA80, distinct from the movie export's joint PCA50/3D UMAP. The `ctrl-norm-embedding` and raw `embeddings` vector names match that export. MMD uses the pre-UMAP representation. Output directories must not already exist; failures are retained without a completion provenance file.
+| Output | Contents |
+| --- | --- |
+| `predictions.zarr` | Raw `X`, metadata and optional classifier predictions. Phenotype also includes `obsm/X_control_mad`. |
+| `embeddings.parquet` | Raw `embeddings`; phenotype also includes normalized `ctrl-norm-embedding`. |
+| `predictions.parquet` | Metadata, labels and probabilities. |
+| `normalization.json` | Fitted control parameters and source/output checksums. |
+| Coordinate Parquet, PNG/PDF, fitted models | Per-marker PCA/UMAP results. |
+| `mmd_curves.csv`, `mmd_samples.parquet` | Population comparisons and selected observation identities. |
+| `resolved_manifest.yaml`, `provenance.json`, `artifacts.json` | Input paths, settings and output inventory. |
 
-## Artifact inventory
+`observation_id` links embedding vectors to observation metadata.
+Hashed filenames prevent marker labels from creating unsafe paths.
+Use new output directories.
+Failures omit the completion provenance file.
 
-Required for inference: VisCy repository/revision and uv.lock; resolved training config; encoder checkpoint with SHA-256; AI-ready image stores with normalization; cell-index Parquet; explicit experiment/control/timing metadata. Required for new classifier predictions: compatible immutable classifier pipelines, class mappings, checksums and their provenance. Required for cached analysis: embedding AnnData and the metadata above; raw images and GPU are not needed.
+The `normalize` command separately writes `normalized.zarr`.
+The `plot` command skips MMD.
+The older `infer` and `analyze` commands remain available.
+Refit normalization after changing the input population, controls or raw vectors.
 
-Paper encoder: `epoch=105-step=84800.ckpt` under `/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/`. A .sha256 sidecar exists. The resolved config is `config.yaml` at the run root. Do not use mutable last.ckpt.
+## Paper resources
 
-Paper reproduction also requires per-marker embeddings, direct-pAL teacher `predictions_by_threshold.parquet`, lineage information, paper cohort manifests and run_info.json. The supplied paper_figure_pseudotime directory contains plotting provenance referencing parent mmd_curves.csv; plots alone are insufficient to rerun inference. The inventory records the current local locations and hashes of these assets. The real SEC61B infection classifier is classifier/DynaCLR/infection_state__pAL17_to_SEC61B/pipelines/infection_state_SEC61B.joblib relative to the prediction root. The inventory generator lists other classifier artifacts and checksums. These linear classifiers predict infection from marker embeddings. The direct-pAL teacher Parquet supplies the separate infection-onset cohort used by the paper MMD analysis; do not interchange these model roles.
+The [inventory helper](tools/build_paper_inventory.py) lists local checkpoints, configurations, classifiers and cached embeddings.
+The [paper example](tools/smoke_paper.py) selects a small SEC61B population with a saved infection classifier.
+Both accept `--prediction-root` and `--output`.
+Use the paper's `epoch105-step84800` prediction directory as `--prediction-root`.
+Image and coordinate paths also appear in run manifests.
+The current resource inventory uses HPC paths without public download URLs.
+The recorded inventory is:
 
-## Validated example
-
-Generate an inventory with `uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/build_paper_inventory.py --prediction-root PATH --output inventory.json`. Run the small real-data example with `uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/smoke_paper.py --prediction-root PATH --output NEW_DIRECTORY`.
-
-Executed validation under `/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/portable-v1/`:
-
-- `analysis-normalized`: 192 nonblank SEC61B observations, 32 controls and 32 treated cells at each of 12/18/24 HPI; real saved infection classifier, PCA/UMAP and MMD figures.
-- `external-analysis`: removed track metadata, renamed ID/treatment columns, derived HPI from frame metadata; MMD tables matched the normalized example exactly.
-- `raw-inference-v6`: eight real image crops with track IDs omitted; pinned epoch105 checkpoint; finite 768-dimensional embeddings, unique source identities and infection predictions.
-- `../paper_inventory.json`: 131 available local artifacts, including checksummed classifier and encoder files.
-
-Smoke MMD uses 20 permutations and five subsamples for speed. Publication comparisons use the full saved settings: 200 permutations and 50 paired subsamples. See [VALIDATION.md](VALIDATION.md) for the full-cohort numerical comparison and fresh inference checks.
-
-The default `inference_recipe: paper` uses FOV mean/std normalization, Phase3D focus, a 16-reference-slice window with offset 0.3, MIP for fluorescence, 0.1494 µm XY and 0.174 µm Z reference sampling, and 160 × 160 model crops. It reuses the paper Triplet transformations with a coordinate-only adapter; internal missing-track sentinels are never exported as biological tracks. Subpixel coordinates are rounded to the nearest native pixel. The explicit `inference_recipe: training` route requires `training_config` and retains its per-frame normalization. Both routes reject missing/invalid statistics. The paper route records filtered boundary observations in `excluded_cells.parquet` and fails if any requested observation was excluded. It checks every requested observation appears exactly once; incomplete threaded-loader results fail rather than silently producing a successful bundle.
+```text
+/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/paper_inventory.json
+```

@@ -1,37 +1,29 @@
 ---
 name: embed
-description: Generate cell embeddings with CELL-DINO or DynaCell/DynaCLR representation checkpoints, including the selected model's image preprocessing.
+description: Extract raw cell embeddings with CELL-DINO or compatible DynaCell/DynaCLR checkpoints, including checkpoint-specific image preprocessing.
 ---
 
-Read the [input/output contract](../../examples/organelle_dynamics/CONTRACT.md).
-Select the checkpoint and its matching configuration before inference.
+Read the [input contract](../../examples/organelle_dynamics/CONTRACT.md#inputs).
+Choose a checkpoint through the [start page](../../examples/organelle_dynamics/README.md).
 
-| Model | Manifest settings |
-| --- | --- |
-| Paper DynaCLR | `model_family: dynaclr`, `inference_recipe: paper`, checkpoint and SHA-256. |
-| Other DynaCell/DynaCLR representation checkpoint | `model_family: dynacell`, `inference_recipe: training`, matching `training_config`, checkpoint and SHA-256. |
-| Frozen CELL-DINO | `model_family: cell_dino`, CELL-DINO `training_config`, local `.pth` checkpoint and SHA-256. |
-
-The [CELL-DINO configuration](../../examples/organelle_dynamics/cell_dino_recipe.yaml) supplies its model and image preprocessing settings.
-The manifest checkpoint replaces its `weights_path`.
-Use the matching training configuration for other representation checkpoints.
-Set `predict.embedding_key: projections` only when the requested representation uses a trained projection head.
-Include the selected output and preprocessing recipe in `feature_space`.
-
-Supply AI-ready images, cell coordinates and the [required metadata](../../examples/organelle_dynamics/CONTRACT.md).
-Keep cropping, focus selection, resizing, channel selection and image intensity normalization inside this step.
-Preserve the checkpoint's preprocessing recipe.
-Check source-image correspondence on a small sample before full inference.
-
-```sh
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow embed --manifest embed.yaml --output new-embedding-directory
+```mermaid
+flowchart LR
+    I["Images + cell coordinates"] --> P["Crop, focus, resize and normalize images"]
+    C["Selected checkpoint + recipe"] --> P
+    C --> E["Encoder inference"]
+    P --> E
+    E --> O["Raw embeddings + source identities"]
 ```
 
-The runner checks the checkpoint checksum before loading weights.
-It rejects existing output directories and missing observation identities.
-It saves raw vectors in predictions.zarr and embeddings.parquet.
-Keep the checkpoint identity, resolved configuration and source metadata with these outputs.
+```sh
+uv run --no-sync python -m dynaclr.evaluation.organelle_workflow embed --manifest embed.yaml --output results/embed
+```
 
-Put classifier models in the phenotype manifest.
-Pass predictions.zarr to phenotype for control-relative embedding normalization, UMAP and MMD.
-Cell coordinates do not establish track identities.
+Use the selected checkpoint's model configuration and image recipe.
+Include preprocessing and feature/projection selection in `feature_space`.
+Check source-image correspondence on a small sample before full inference.
+Preserve cell identities and checkpoint provenance.
+Do not manufacture track identities.
+
+The runner verifies checkpoint checksums and rejects classifier configurations.
+Pass `predictions.zarr` to phenotype for control normalization and population analysis.

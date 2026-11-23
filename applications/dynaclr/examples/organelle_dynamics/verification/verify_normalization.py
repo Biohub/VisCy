@@ -12,7 +12,7 @@ from dynaclr.evaluation.organelle_workflow import control_normalize
 
 
 def verify(root: Path, out: Path):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/evaluation"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts/evaluation"))
     import analyze_direct_pal_aligned_organelle_mmd as paper
 
     out.mkdir(parents=True, exist_ok=False)
