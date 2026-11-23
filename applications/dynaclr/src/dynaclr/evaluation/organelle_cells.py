@@ -1,11 +1,14 @@
-"""Build an untracked inference cell index from nuclear-label centroids.
+"""Build an untracked cell index or pseudo-tracks from nuclear-label centroids.
 
 Each nucleus instance at each frame is one observation. Label values are
 per-frame instance IDs, not track identities: they appear only in cell_id and
-nucleus_label, and the track/lineage fields stay null.
+nucleus_label, and the track/lineage fields stay null. Pseudo-tracks follow the
+classical-sampling CSV convention: track_id is the per-frame label value.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -46,6 +49,54 @@ def _check_interval(pos, interval_minutes):
         )
 
 
+def _label_frames(pos, where, label_name):
+    """Yield (t, props) with nucleus_label, y and x centroids for each frame of 2D labels/<label_name>."""
+    if label_name not in pos.zgroup.get("labels", {}):
+        raise ValueError(f"{where} has no labels/{label_name}")
+    shape = pos["0"].shape
+    labels = pos.zgroup["labels"][label_name]["0"]
+    if labels.shape[0] != shape[0] or labels.shape[-2:] != shape[-2:]:
+        raise ValueError(f"{where} labels/{label_name} shape {labels.shape} != image {shape}")
+    if labels.shape[2] != 1:
+        raise ValueError("Label centroids need 2D (Z=1) nuclear labels")
+    for t in range(shape[0]):
+        props = pd.DataFrame(regionprops_table(np.asarray(labels[t, 0, 0]), properties=("label", "centroid")))
+        yield t, props.rename(columns={"centroid-0": "y", "centroid-1": "x", "label": "nucleus_label"})
+
+
+TRACK_COLUMNS = ["track_id", "t", "y", "x", "id", "parent_track_id", "parent_id"]
+
+
+def tracks_from_labels(store, label_name, output):
+    """Write one pseudo-tracking Parquet per FOV from nuclear-label centroids.
+
+    ``track_id`` is the nucleus label value, which restarts each frame and so does
+    not link nuclei over time. ``id`` is ``100000`` plus the row number from 1 in
+    (t, label) order, unique within the FOV, and parents are -1. Files are ``<output>/<row>/<col>/<fov>/tracks_<row>_<col>_<fov>.parquet``.
+
+    Returns
+    -------
+    dict[str, int]
+        Observation count per FOV.
+    """
+    counts = {}
+    with open_ome_zarr(store, mode="r") as plate:
+        for name, pos in plate.positions():
+            frames = [props.assign(t=t) for t, props in _label_frames(pos, name, label_name)]
+            tracks = pd.concat(frames, ignore_index=True).sort_values(["t", "nucleus_label"], ignore_index=True)
+            tracks["track_id"] = tracks.nucleus_label
+            tracks["id"] = 100000 + np.arange(1, len(tracks) + 1)
+            tracks["parent_track_id"] = -1
+            tracks["parent_id"] = -1
+            fov_dir = Path(output) / name
+            fov_dir.mkdir(parents=True)
+            tracks[TRACK_COLUMNS].to_parquet(fov_dir / f"tracks_{name.replace('/', '_')}.parquet", index=False)
+            counts[name] = len(tracks)
+    if not any(counts.values()):
+        raise ValueError(f"No labelled nuclei found in labels/{label_name}")
+    return counts
+
+
 def cells_from_labels(m):
     """Return (cells, excluded) DataFrames in the canonical cell-index schema."""
     first_frame_hpi, interval_minutes = require_timing(m)
@@ -79,24 +130,13 @@ def cells_from_labels(m):
                 missing = set(channels) - set(pos.channel_names)
                 if missing:
                     raise ValueError(f"{well_name}/{fov} lacks channels {sorted(missing)}")
-                if label_name not in pos.zgroup.get("labels", {}):
-                    raise ValueError(f"{well_name}/{fov} has no labels/{label_name}")
                 _check_interval(pos, interval_minutes)
                 shape = pos["0"].shape
-                labels = pos.zgroup["labels"][label_name]["0"]
-                if labels.shape[0] != shape[0] or labels.shape[-2:] != shape[-2:]:
-                    raise ValueError(f"{well_name}/{fov} labels/{label_name} shape {labels.shape} != image {shape}")
-                if labels.shape[2] != 1:
-                    raise ValueError("cells-from-labels needs 2D (Z=1) nuclear labels")
                 pixel_xy, pixel_z = pos.scale[-1], pos.scale[-3]
                 half = paper_crop_half_px(pixel_xy)
-                for t in range(shape[0]):
-                    props = pd.DataFrame(
-                        regionprops_table(np.asarray(labels[t, 0, 0]), properties=("label", "centroid"))
-                    )
+                for t, props in _label_frames(pos, f"{well_name}/{fov}", label_name):
                     if props.empty:
                         continue
-                    props = props.rename(columns={"centroid-0": "y", "centroid-1": "x", "label": "nucleus_label"})
                     props["t"] = t
                     props["well"] = well_name
                     props["fov"] = fov

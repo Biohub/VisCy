@@ -14,7 +14,7 @@ import pandas as pd
 import yaml
 from sklearn.decomposition import PCA
 
-from dynaclr.evaluation.organelle_cells import TIMING_HELP, cells_from_labels, require_timing
+from dynaclr.evaluation.organelle_cells import TIMING_HELP, cells_from_labels, require_timing, tracks_from_labels
 from dynaclr.evaluation.organelle_normalization import (
     CONTRACT_KEY,
     export_embeddings,
@@ -330,7 +330,7 @@ def analyze(data, m, output, *, plot_only=False):
     return settings
 
 
-STAGES = ("cells-from-labels", "infer", "normalize", "plot", "analyze")
+STAGES = ("cells-from-labels", "tracks-from-labels", "infer", "normalize", "plot", "analyze")
 
 
 def run(manifest, output, stage):
@@ -378,6 +378,18 @@ def _run(manifest, output, stage):
     if stage == "cells-from-labels":
         summary = build_cells(m, output)
         _write_provenance(output, m, stage, cells=summary, track_identity="none; nucleus labels are per-frame")
+        return
+    if stage == "tracks-from-labels":
+        counts = tracks_from_labels(m["labels"]["store"], m["labels"].get("label", "nuclei"), output / "tracks")
+        summary = dict(fovs=len(counts), observations=sum(counts.values()), per_fov=counts)
+        (output / "tracks_summary.json").write_text(json.dumps(summary, indent=2))
+        _write_provenance(
+            output,
+            m,
+            stage,
+            tracks=dict(fovs=summary["fovs"], observations=summary["observations"]),
+            track_identity="pseudo; track_id is the per-frame nucleus label",
+        )
         return
     if stage == "infer":
         m = infer(m, output)

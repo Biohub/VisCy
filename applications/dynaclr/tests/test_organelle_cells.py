@@ -94,3 +94,21 @@ def test_missing_channel_normalization_names_channel(tmp_path):
         pos.zattrs["normalization"] = {"4-GFP-raw": {"fov_statistics": STATS}}
     with pytest.raises(ValueError, match="'GFP'.*4-GFP-raw"):
         run(_manifest(tmp_path), tmp_path / "out", "cells-from-labels")
+
+
+def test_tracks_from_labels_per_fov_parquet(tmp_path):
+    _label_store(tmp_path / "plate.zarr")
+    manifest = tmp_path / "tracks.yaml"
+    manifest.write_text(yaml.safe_dump(dict(schema_version=1, root=".", labels=dict(store="plate.zarr"))))
+    run(manifest, tmp_path / "out", "tracks-from-labels")
+    for fov in ["A/1/0", "A/2/0"]:
+        tracks = pd.read_parquet(tmp_path / "out/tracks" / fov / f"tracks_{fov.replace('/', '_')}.parquet")
+        assert list(tracks.columns) == ["track_id", "t", "y", "x", "id", "parent_track_id", "parent_id"]
+        # t=0: labels 7 and 8; t=1: label 7. track_id is the label value; id is unique.
+        assert tracks.t.tolist() == [0, 0, 1]
+        assert tracks.track_id.tolist() == [7, 8, 7]
+        assert tracks.id.tolist() == [100001, 100002, 100003]
+        assert (tracks[["parent_track_id", "parent_id"]] == -1).all().all()
+        np.testing.assert_allclose(tracks[["y", "x"]].to_numpy(), [[32, 32], [3, 3], [32, 32]])
+    summary = json.loads((tmp_path / "out/tracks_summary.json").read_text())
+    assert summary["fovs"] == 2 and summary["observations"] == 6

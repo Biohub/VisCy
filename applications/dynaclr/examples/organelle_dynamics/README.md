@@ -7,6 +7,7 @@ This workflow uses DynaCLR checkpoints and optional saved classifiers.
 
 | Skill | Required inputs | Outputs |
 | --- | --- | --- |
+| [organelle-pseudotracks](../../skills/organelle-pseudotracks/SKILL.md) | Images with 2D nuclear labels and no tracking. | Per-FOV pseudo-tracking Parquet with the tracking-CSV columns. |
 | [organelle-inference](../../skills/organelle-inference/SKILL.md) | Images, cell-coordinate Parquet, metadata, encoder checkpoint and checksum. Optional classifier models. | Raw embeddings and classifier predictions. |
 | [organelle-normalization](../../skills/organelle-normalization/SKILL.md) | Raw embeddings, metadata and the dataset's own controls. | Normalized embeddings, preserved raw embeddings and fitted control parameters. |
 | [organelle-plotting](../../skills/organelle-plotting/SKILL.md) | Normalized embeddings and available infection labels. | PCA/UMAP coordinates, figures and fitted models. |
@@ -14,6 +15,7 @@ This workflow uses DynaCLR checkpoints and optional saved classifiers.
 
 Cell coordinates are sufficient for inference and population analysis.
 Without a coordinate Parquet, `cells-from-labels` builds one from nuclear labels.
+`tracks-from-labels` writes per-FOV pseudo-tracks from the same labels; `track_id` is the per-frame label value.
 Track or lineage sampling requires genuine track or lineage identifiers.
 
 ## Required resources
