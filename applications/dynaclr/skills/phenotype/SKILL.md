@@ -4,7 +4,13 @@ description: Normalize embeddings against matched controls and generate UMAP plo
 ---
 
 Read the [analysis contract](../../examples/organelle_dynamics/CONTRACT.md#analysis).
+Use the environment setup on the [start page](../../examples/organelle_dynamics/README.md#run).
 Set `embeddings` to the embed output's `predictions.zarr`.
+Request a completed configuration if none is available.
+Offer the phenotype template for the user to complete.
+Accept any YAML filename and check for unresolved placeholders.
+Use [data preparation](../../examples/organelle_dynamics/CONTRACT.md#prepare-external-data) for external embeddings or missing metadata.
+Ask for control identities and time references when the supplied data does not establish them.
 
 ```mermaid
 flowchart LR
@@ -19,7 +25,7 @@ flowchart LR
 ```
 
 ```sh
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow phenotype --manifest phenotype.yaml --output results/phenotype
+dynacell phenotype --config /path/to/phenotype.yml --output results/phenotype
 ```
 
 Use each marker, experiment and control group's own controls.

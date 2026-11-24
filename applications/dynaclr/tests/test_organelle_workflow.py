@@ -33,6 +33,37 @@ def test_manifest_relocatable(tmp_path):
     assert load_manifest(manifest)["embeddings"] == str(tmp_path / "data/cells.zarr")
 
 
+def test_unfinished_configuration_rejected_before_creating_output(tmp_path):
+    from dynaclr.evaluation.organelle_workflow import run
+
+    config = tmp_path / "my-experiment.yml"
+    config.write_text("schema_version: 1\nmetadata:\n  experiment: replace-with-experiment\n")
+    output = tmp_path / "results"
+    with pytest.raises(ValueError, match="metadata.experiment"):
+        run(config, output, "phenotype")
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("option", ["--config", "-c", "--manifest"])
+def test_cli_config_aliases_run_same_workflow(normalization_data, tmp_path, monkeypatch, option):
+    import anndata as ad
+    import yaml
+
+    from dynaclr.evaluation.organelle_workflow import main
+
+    normalization_data.write_zarr(tmp_path / "raw.zarr")
+    config = tmp_path / "my-experiment.yml"
+    config.write_text(
+        yaml.safe_dump(dict(schema_version=1, embeddings="raw.zarr", feature_space="encoder", control_label="mock"))
+    )
+    output = tmp_path / "normalized"
+    monkeypatch.setattr("sys.argv", ["dynacell", "normalize", option, str(config), "--output", str(output)])
+    main()
+    saved = ad.read_zarr(output / "normalized.zarr")
+    np.testing.assert_array_equal(saved.X, normalization_data.X)
+    assert "X_control_mad" in saved.obsm
+
+
 def test_control_normalization_translation_invariance():
     from dynaclr.evaluation.organelle_workflow import control_normalize
 

@@ -29,6 +29,99 @@ Coordinates use zero-based native image indices.
 Image dimensions, channels, pixel sizes, focus and normalization metadata must agree with the source images.
 Keep absent biological track identifiers null.
 
+## Prepare external data
+
+The agent prepares missing inputs before running the skills.
+The workflow runner consumes those prepared inputs; it does not perform segmentation or format conversion automatically.
+
+1. Inspect the supplied images, coordinates, embeddings and experimental metadata.
+2. Ask for missing channel identities, control assignments, pixel sizes and time references.
+3. Select the checkpoint and its matching image recipe.
+4. Convert only the inputs that do not satisfy the contract below.
+5. Check several extracted cell crops against their source images before full inference.
+
+### Images and coordinates
+
+Convert source images into an iohub-compatible HCS OME-Zarr store.
+Use the source format's reader and the installed iohub writer.
+Preserve axis order `T,C,Z,Y,X`, channel names and physical pixel sizes.
+Record the source-to-output position mapping.
+Do not guess missing axes or pixel sizes.
+
+Use existing cell coordinates when available.
+Otherwise, run an appropriate segmentation or detection method and extract cell centers.
+Record the method and parameters.
+Convert crop-relative coordinates into native image coordinates.
+Tracking is optional for observation sampling.
+Keep unavailable track identifiers null.
+
+Build a Parquet table with one row per cell, frame and selected channel.
+Include these fields alongside the experimental metadata above:
+
+| Fields | Meaning |
+| --- | --- |
+| `store_path`, `well`, `fov` | Absolute image-store path and position components. |
+| `t`, `y`, `x`, `z` | Native coordinates; `t` is an integer frame index. |
+| `channel_name`, `microscope`, `tracks_path` | Source descriptors; retain a null `tracks_path` when tracks are absent. |
+| `T_shape`, `C_shape`, `Z_shape`, `Y_shape`, `X_shape` | Dimensions read from the source image. |
+| `pixel_size_xy_um`, `pixel_size_z_um`, `z_focus_mean` | Calibration and focus values required by the selected recipe. |
+
+Use unique `cell_id` values for cell/frame observations.
+Keep biological `track_id` separate.
+Map CSV column names explicitly instead of deriving treatments from filenames.
+For registered tracking datasets, `dynaclr build-cell-index --help` describes the existing collection converter.
+For other tables, use pandas and preserve custom metadata with `DataFrame.to_parquet`.
+The fixed-schema cell-index writer omits additional fields such as `control_group` and `replicate`.
+
+### Image statistics and focus
+
+The runner currently requires image normalization metadata for every encoder, including CELL-DINO.
+Compute missing statistics on the prepared store:
+
+```python
+from viscy_utils.meta_utils import generate_normalization_metadata
+
+generate_normalization_metadata("/absolute/path/images.zarr", num_workers=1)
+```
+
+This writes normalization attributes into the image store.
+It computes both FOV and per-timepoint statistics.
+Use FOV statistics for the paper recipe and per-timepoint statistics for the training recipe.
+
+For recipes requiring focus estimation, use `qc run -c focus.yml` with the [focus configuration](../../../qc/configs/focus.yml).
+Install the `viscy-qc` workspace package when this command is needed.
+Set optical parameters from the acquisition metadata.
+The paper recipe requires Phase3D focus metadata.
+Read `focus_slice` metadata into the cell table when the selected recipe needs it.
+Check crop boundaries using the selected checkpoint's crop size and pixel-size conversion.
+Record excluded observations explicitly.
+
+### Existing embeddings and metadata
+
+For existing embeddings, prepare AnnData Zarr with raw vectors in `X` and aligned metadata in `obs`.
+Preserve the checkpoint and preprocessing identity in `feature_space`.
+Do not treat already normalized vectors as raw embeddings.
+Images and segmentation are unnecessary for this route.
+
+Use `columns` to rename source fields and `metadata` for known constants:
+
+```yaml
+columns:
+  object_id: cell_id
+  treatment: perturbation
+metadata:
+  experiment: experiment-1
+  control_group: acquisition-1
+  replicate: replicate-1
+timing:
+  interval_minutes: 30
+  first_frame_hpi: 3
+```
+
+Replace these example values with actual experimental facts.
+Preserve per-observation values when experiments differ.
+The current normalization requires controls at two or more timepoints; single-timepoint data needs a different normalization recipe.
+
 ## Models
 
 | Selection | Configuration |

@@ -162,6 +162,9 @@ a bare invocation writes **and** submits.
 
 ## Subcommands
 
+- `embed`, `phenotype` — extract cell embeddings and compare populations using controls.
+  See the [profiling start page](../dynaclr/examples/organelle_dynamics/README.md) for configuration and data preparation.
+  Install these commands' dependencies with the `profiler` extra.
 - `fit`, `validate`, `predict` — supported for all architectures. For UNetViT3D
   and CELL-Diff, `yx_patch_size` and `z_window_size` in the data config must
   match the model's `input_spatial_size`.

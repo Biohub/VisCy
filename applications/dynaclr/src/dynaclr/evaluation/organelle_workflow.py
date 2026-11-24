@@ -34,6 +34,23 @@ def sha256(path):
 def load_manifest(path):
     path = Path(path).resolve()
     m = yaml.safe_load(path.read_text())
+    if not isinstance(m, dict):
+        raise ValueError("Configuration must be a YAML mapping")
+    unfinished = []
+
+    def check_placeholders(value, key=""):
+        if isinstance(value, dict):
+            for name, item in value.items():
+                check_placeholders(item, f"{key}.{name}" if key else str(name))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                check_placeholders(item, f"{key}[{index}]")
+        elif isinstance(value, str) and value.startswith("replace-with-"):
+            unfinished.append(key)
+
+    check_placeholders(m)
+    if unfinished:
+        raise ValueError(f"Complete the configuration fields before running: {', '.join(unfinished)}")
     if m.get("schema_version") != 1:
         raise ValueError("schema_version must be 1")
     root = (path.parent / m.get("root", ".")).resolve()
@@ -459,7 +476,7 @@ def _run(manifest, output, stage):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=["embed", "phenotype", "infer", "normalize", "plot", "analyze"])
-    parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--config", "-c", "--manifest", dest="manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     run(args.manifest, args.output, args.stage)

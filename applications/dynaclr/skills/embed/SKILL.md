@@ -5,6 +5,13 @@ description: Extract raw cell embeddings with CELL-DINO or compatible DynaCell/D
 
 Read the [input contract](../../examples/organelle_dynamics/CONTRACT.md#inputs).
 Choose a checkpoint through the [start page](../../examples/organelle_dynamics/README.md).
+Request a completed configuration and data paths if they are absent from the conversation or workspace.
+Offer the matching template when the user has no configuration.
+Ask the user to fill unknown paths and experimental metadata.
+Accept any YAML filename; copying the template is optional.
+Inspect its contents for unresolved placeholders and missing inputs before execution.
+For incompatible inputs, follow [data preparation](../../examples/organelle_dynamics/CONTRACT.md#prepare-external-data) and prepare the missing artifacts.
+Ask only for facts that cannot be recovered from the supplied data.
 
 ```mermaid
 flowchart LR
@@ -16,7 +23,7 @@ flowchart LR
 ```
 
 ```sh
-uv run --no-sync python -m dynaclr.evaluation.organelle_workflow embed --manifest embed.yaml --output results/embed
+dynacell embed --config /path/to/embedding.yml --output results/embed
 ```
 
 Use the selected checkpoint's model configuration and image recipe.
