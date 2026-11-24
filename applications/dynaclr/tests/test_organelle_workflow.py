@@ -372,7 +372,9 @@ def test_embed_exports_only_raw_vectors(normalization_data, tmp_path, monkeypatc
     monkeypatch.setattr(workflow, "infer", infer)
     monkeypatch.setattr(workflow, "classify", lambda *args: pytest.fail("embed must not invoke classification"))
     path = tmp_path / "manifest.yaml"
-    path.write_text(yaml.safe_dump({"schema_version": 1, "feature_space": "test-encoder"}))
+    path.write_text(
+        yaml.safe_dump({"schema_version": 1, "feature_space": "test-encoder", "cell_index": "test-cells.parquet"})
+    )
     output = tmp_path / "output"
     workflow.run(path, output, "embed")
     saved = ad.read_zarr(output / "predictions.zarr")

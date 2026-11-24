@@ -13,10 +13,15 @@ Inspect its contents for unresolved placeholders and missing inputs before execu
 For incompatible inputs, follow [data preparation](../../examples/organelle_dynamics/CONTRACT.md#prepare-external-data) and prepare the missing artifacts.
 Ask only for facts that cannot be recovered from the supplied data.
 For data without tracking, follow the [independent-instance table contract](../../examples/organelle_dynamics/CONTRACT.md#data-without-tracking).
+For supported nuclear labels, replace `cell_index` with `labels` in the configuration.
+The same `embed` command prepares independent cell/frame instances before inference.
+Supply the actual starting experimental time; multiple frames also require their interval.
 
 ```mermaid
 flowchart LR
     I["Images + cell coordinates"] --> P["Crop, focus, resize and normalize images"]
+    L["Images + nuclear labels"] --> D["Independent cell/frame instances"]
+    D --> P
     C["Selected checkpoint + recipe"] --> P
     C --> E["Encoder inference"]
     P --> E

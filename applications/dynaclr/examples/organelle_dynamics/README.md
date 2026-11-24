@@ -29,6 +29,7 @@ Fill the template's paths, metadata and checkpoint identity.
 Any YAML filename works; copying or renaming it is optional.
 The agent checks required fields and unresolved placeholders before execution.
 For other data formats, follow [data preparation](CONTRACT.md#prepare-external-data).
+For nuclear labels without tracking, use the [label-input configuration](CONTRACT.md#data-without-tracking) with the same `embed` command.
 
 Install the environment once:
 
@@ -63,6 +64,7 @@ It skips environment synchronization; the default instructions do not require it
 | [dynacell CLI](../../../dynacell/src/dynacell/__main__.py) | Routes `embed` and `phenotype` to the workflow runner. |
 | [organelle_workflow.py](../../src/dynaclr/evaluation/organelle_workflow.py) | Command entry point, metadata checks, classifier calls and plotting. |
 | [organelle_inference.py](../../src/dynaclr/evaluation/organelle_inference.py) | Paper DynaCLR image preprocessing and inference. |
+| [organelle_cells.py](../../src/dynaclr/evaluation/organelle_cells.py) | Label centroids, independent-instance tables and crop exclusions. |
 | [organelle_normalization.py](../../src/dynaclr/evaluation/organelle_normalization.py) | Control normalization and embedding export. |
 | [organelle_mmd.py](../../src/dynaclr/evaluation/organelle_mmd.py) | MMD statistics and uncertainty calculations. |
 | [tools/](tools/) | Optional paper-data inventory and small example. |

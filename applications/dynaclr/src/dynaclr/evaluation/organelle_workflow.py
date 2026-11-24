@@ -59,6 +59,8 @@ def load_manifest(path):
             m[key] = str((root / m[key]).resolve())
     for model in m.get("classifiers", []):
         model["path"] = str((root / model["path"]).resolve())
+    if m.get("labels"):
+        m["labels"]["store"] = str((root / m["labels"]["store"]).resolve())
     return m
 
 
@@ -106,7 +108,10 @@ def validate_cells(frame, normalization_level="timepoint_statistics"):
                 if normalization_level == "timepoint_statistics":
                     stats = stats.get(str(int(row.t)))
                 if not stats or not np.isfinite(stats.get("std", np.nan)) or stats["std"] <= 0:
-                    raise ValueError("Missing or invalid per-frame image normalization metadata")
+                    raise ValueError(
+                        f"{store}/{well}/{fov}: missing or invalid {normalization_level} for "
+                        f"channel {row.channel_name!r}, frame {row.t}; available channels: {list(normalization)}"
+                    )
                 for name in ["mean", "std", "median", "iqr", "min", "max"]:
                     frame.loc[index, "norm_" + name] = stats[name]
             unknown = set(group.channel_name) - set(pos.channel_names)
@@ -153,7 +158,6 @@ def infer(m, output):
     from dynaclr.evaluation.evaluate import _generate_predict_yaml
     from dynaclr.evaluation.evaluate_config import EvaluationConfig
 
-    cells = canonical_obs(pd.read_parquet(m["cell_index"]), m)
     family = m.get("model_family", "dynaclr")
     if family not in ("dynaclr", "dynacell", "cell_dino"):
         raise ValueError("model_family must be dynaclr, dynacell or cell_dino")
@@ -164,17 +168,34 @@ def infer(m, output):
         raise ValueError("The paper recipe exports features; use training for projection embeddings")
     if recipe not in ("paper", "training"):
         raise ValueError("inference_recipe must be paper or training")
-    validate_cells(cells, "fov_statistics" if recipe == "paper" else "timepoint_statistics")
-    cells.to_parquet(output / "cells.parquet", index=False)
     checkpoint = Path(m["checkpoint"])
     if sha256(checkpoint) != m["checkpoint_sha256"]:
         raise ValueError("Encoder checksum mismatch")
+    if recipe == "training":
+        training_cfg, lightning_checkpoint = prediction_model_config(m)
+    if m.get("labels"):
+        from dynaclr.evaluation.organelle_cells import cells_from_labels
+
+        data_init = training_cfg["data"]["init_args"] if recipe == "training" else None
+        cells = canonical_obs(cells_from_labels(m, output, data_init), m)
+        m = dict(
+            m,
+            input_preparation=dict(
+                track_identity="independent_instances",
+                cell_index="cells.parquet",
+                summary="cells_summary.json",
+                tracks="tracks",
+            ),
+        )
+    else:
+        cells = canonical_obs(pd.read_parquet(m["cell_index"]), m)
+    validate_cells(cells, "fov_statistics" if recipe == "paper" else "timepoint_statistics")
+    cells.to_parquet(output / "cells.parquet", index=False)
     if recipe == "paper":
         from dynaclr.evaluation.organelle_inference import predict_paper_cells
 
         destination = predict_paper_cells(cells, checkpoint, output, m.get("predict", {}).get("batch_size", 32))
         return dict(m, embeddings=str(destination), model_family=family, inference_recipe="paper")
-    training_cfg, lightning_checkpoint = prediction_model_config(m)
     config = EvaluationConfig.model_validate(
         dict(
             training_config=m["training_config"],
@@ -400,6 +421,8 @@ def _run(manifest, output, stage):
     m = load_manifest(manifest)
     if requested_stage == "embed" and m.get("classifiers"):
         raise ValueError("embed performs inference only; put classifiers in the phenotype manifest")
+    if stage == "infer" and bool(m.get("cell_index")) == bool(m.get("labels")):
+        raise ValueError("Supply exactly one of cell_index or labels for embedding inference")
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "resolved_manifest.yaml").write_text(yaml.safe_dump(m))

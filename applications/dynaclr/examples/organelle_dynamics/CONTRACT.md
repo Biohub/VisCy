@@ -8,7 +8,7 @@ Use the [start page](README.md) for commands and file navigation.
 | --- | --- |
 | Manifest | `schema_version: 1`, `root`, `feature_space`, `control_label`. |
 | Observation metadata | `cell_id`, `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. |
-| Embed inputs | `cell_index`, `checkpoint`, `checkpoint_sha256`, model selection and image preprocessing settings. |
+| Embed inputs | Either `cell_index` or `labels`, plus `checkpoint`, `checkpoint_sha256`, model selection and image preprocessing settings. |
 | Phenotype input | `embeddings`: AnnData Zarr with raw vectors in `X` and observation metadata in `obs`. |
 | Optional classifiers | Trusted files with `path`, `sha256`, `feature_space`, `marker` and `task`. |
 
@@ -32,7 +32,8 @@ Keep absent biological track identifiers null.
 ## Prepare external data
 
 The agent prepares missing inputs before running the skills.
-The workflow runner consumes those prepared inputs; it does not perform segmentation or format conversion automatically.
+The runner converts supported nuclear labels into cell coordinates when configured through `labels`.
+Image conversion and segmentation remain preparation steps.
 
 1. Inspect the supplied images, coordinates, embeddings and experimental metadata.
 2. Ask for missing channel identities, control assignments, pixel sizes and time references.
@@ -75,7 +76,8 @@ The fixed-schema cell-index writer omits additional fields such as `control_grou
 
 ### Data without tracking
 
-For data without tracking, the agent creates a tracking-format Parquet table during input preparation.
+For nuclear-label input, `embed` creates tracking-format Parquet tables and a canonical cell index before inference.
+For other detection formats, the agent prepares the canonical cell index.
 Each detected cell is an independent instance.
 This applies to single-timepoint images and independently segmented frames without temporal links.
 Use one row per cell/frame, shared across the selected image channels.
@@ -96,16 +98,16 @@ track_id,t,y,x,id,parent_track_id,parent_id
 2,0,310.0,145.5,2,-1,-1
 ```
 
-Write each FOV table to `tracks/<row>/<col>/<fov>/tracks_<row>_<col>_<fov>.parquet`.
+The runner writes each FOV table to `tracks/<row>/<col>/<fov>/tracks_<row>_<col>_<fov>.parquet` within the output directory.
 Preserve the mapping from generated identifiers to source image, frame and segmentation label.
 Do not reuse segmentation label values as identifiers when labels restart in another frame.
-Record `track_identity: independent_instances` in the preparation provenance.
+Preparation provenance records `track_identity: independent_instances` and the generated table location.
 These identifiers describe observations; they do not establish biological continuity.
 
 Build the canonical cell index from these observations for `embed`.
 Preserve a unique `cell_id` containing the source position and instance identity.
 Keep biological track and lineage fields null in the canonical index and embedding outputs.
-Keep its `tracks_path` null; record the generated table's path in preparation provenance.
+Keep its `tracks_path` null.
 Use observation sampling for these data.
 Do not use the generated identifiers for temporal pairing, track sampling, lineage sampling or time alignment.
 
@@ -113,6 +115,40 @@ Set `hours_post_perturbation` from the experimental time reference.
 Frame zero does not imply zero hours post perturbation.
 Single-timepoint embedding does not require temporal tracking.
 The current phenotype normalization still requires controls at two or more timepoints per group.
+
+To use nuclear labels, replace `cell_index` with this block in the embedding configuration:
+
+```yaml
+labels:
+  store: images.zarr
+  label: nuclei
+  channels:
+    - name: GFP
+      marker: SEC61B
+  perturbation_wells:
+    uninfected: [A/1]
+    treated: [A/2]
+metadata:
+  experiment: experiment-1
+  control_group: acquisition-1
+  replicate: replicate-1
+  microscope: microscope-1
+timing:
+  first_frame_hpi: 24
+  # interval_minutes: 30  # Required only when images contain multiple frames.
+```
+
+Replace the example values with the acquisition metadata.
+Run the same `dynacell embed --config … --output …` command.
+Labels must occupy `labels/nuclei/0` with shape `(T, 1, 1, Y, X)` and integer values.
+Zero denotes background; positive values identify cells within each frame.
+Image and label dimensions must agree in T, Y and X.
+The training recipe supports label input for Z=1 images; supply coordinates for training-recipe Z-stacks.
+The paper recipe retains its existing focus requirements for Z-stacks.
+The runner filters boundary cells using the selected recipe's crop geometry.
+`cells.parquet` and `excluded_cells.parquet` preserve `instance_id` and `nucleus_label` for source mapping.
+`cells_summary.json` records counts and the absence of temporal identity.
+The FOV tracking-format tables include all detected instances, including those excluded from inference.
 
 ### Image statistics and focus
 
