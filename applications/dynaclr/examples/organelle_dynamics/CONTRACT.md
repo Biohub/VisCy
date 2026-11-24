@@ -73,6 +73,47 @@ For registered tracking datasets, `dynaclr build-cell-index --help` describes th
 For other tables, use pandas and preserve custom metadata with `DataFrame.to_parquet`.
 The fixed-schema cell-index writer omits additional fields such as `control_group` and `replicate`.
 
+### Data without tracking
+
+For data without tracking, the agent creates a tracking-format Parquet table during input preparation.
+Each detected cell is an independent instance.
+This applies to single-timepoint images and independently segmented frames without temporal links.
+Use one row per cell/frame, shared across the selected image channels.
+
+| Column | Value |
+| --- | --- |
+| `id` | Unique integer observation identifier within the FOV. |
+| `track_id` | The same independent instance identifier as `id`; never reused across frames. |
+| `t` | Native frame index; zero for a single-frame image. |
+| `y`, `x` | Cell centroid in native image pixels. |
+| `parent_track_id`, `parent_id` | `-1`, indicating no parent relationship. |
+
+Example for two cells in one single-frame image:
+
+```text
+track_id,t,y,x,id,parent_track_id,parent_id
+1,0,120.5,200.0,1,-1,-1
+2,0,310.0,145.5,2,-1,-1
+```
+
+Write each FOV table to `tracks/<row>/<col>/<fov>/tracks_<row>_<col>_<fov>.parquet`.
+Preserve the mapping from generated identifiers to source image, frame and segmentation label.
+Do not reuse segmentation label values as identifiers when labels restart in another frame.
+Record `track_identity: independent_instances` in the preparation provenance.
+These identifiers describe observations; they do not establish biological continuity.
+
+Build the canonical cell index from these observations for `embed`.
+Preserve a unique `cell_id` containing the source position and instance identity.
+Keep biological track and lineage fields null in the canonical index and embedding outputs.
+Keep its `tracks_path` null; record the generated table's path in preparation provenance.
+Use observation sampling for these data.
+Do not use the generated identifiers for temporal pairing, track sampling, lineage sampling or time alignment.
+
+Set `hours_post_perturbation` from the experimental time reference.
+Frame zero does not imply zero hours post perturbation.
+Single-timepoint embedding does not require temporal tracking.
+The current phenotype normalization still requires controls at two or more timepoints per group.
+
 ### Image statistics and focus
 
 The runner currently requires image normalization metadata for every encoder, including CELL-DINO.

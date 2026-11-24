@@ -12,6 +12,7 @@ Accept any YAML filename; copying the template is optional.
 Inspect its contents for unresolved placeholders and missing inputs before execution.
 For incompatible inputs, follow [data preparation](../../examples/organelle_dynamics/CONTRACT.md#prepare-external-data) and prepare the missing artifacts.
 Ask only for facts that cannot be recovered from the supplied data.
+For data without tracking, follow the [independent-instance table contract](../../examples/organelle_dynamics/CONTRACT.md#data-without-tracking).
 
 ```mermaid
 flowchart LR
@@ -30,7 +31,7 @@ Use the selected checkpoint's model configuration and image recipe.
 Include preprocessing and feature/projection selection in `feature_space`.
 Check source-image correspondence on a small sample before full inference.
 Preserve cell identities and checkpoint provenance.
-Do not manufacture track identities.
+Keep generated instance identifiers separate from biological track identities.
 
 The runner verifies checkpoint checksums and rejects classifier configurations.
 Pass `predictions.zarr` to phenotype for control normalization and population analysis.
