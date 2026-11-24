@@ -46,6 +46,8 @@ dynacell phenotype --config /path/to/phenotype.yml --output results/phenotype
 ```
 
 Set the phenotype configuration's `embeddings` to the generated `predictions.zarr`.
+Set `normalization.mode` to `per_timepoint` or `pooled` to choose how controls are grouped across time.
+The default `time_matched` preserves the paper recipe; see the [normalization options](CONTRACT.md#analysis).
 Relative input paths resolve against the configuration's `root`, relative to its directory.
 This includes CELL-DINO's `training_config` recipe path.
 Use a new output directory for each run.

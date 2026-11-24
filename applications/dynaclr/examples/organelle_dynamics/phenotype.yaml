@@ -3,6 +3,8 @@ root: .
 feature_space: replace-with-encoder-sha256
 embeddings: results/embed/predictions.zarr
 control_label: uninfected
+normalization:
+  mode: time_matched  # Paper default; alternatives: per_timepoint, pooled.
 columns:
   source_cell_id: cell_id
 metadata:

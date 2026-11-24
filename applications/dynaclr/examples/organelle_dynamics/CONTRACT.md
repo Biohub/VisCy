@@ -114,7 +114,7 @@ Do not use the generated identifiers for temporal pairing, track sampling, linea
 Set `hours_post_perturbation` from the experimental time reference.
 Frame zero does not imply zero hours post perturbation.
 Single-timepoint embedding does not require temporal tracking.
-The current phenotype normalization still requires controls at two or more timepoints per group.
+For single-timepoint phenotype analysis, select `per_timepoint` or `pooled` normalization.
 
 To use nuclear labels, replace `cell_index` with this block in the embedding configuration:
 
@@ -197,7 +197,7 @@ timing:
 
 Replace these example values with actual experimental facts.
 Preserve per-observation values when experiments differ.
-The current normalization requires controls at two or more timepoints; single-timepoint data needs a different normalization recipe.
+Single-timepoint data supports `per_timepoint` and `pooled` normalization.
 
 ## Models
 
@@ -225,15 +225,35 @@ They use compatible raw embeddings.
 ## Analysis
 
 Normalization fits controls independently for each marker, experiment and control group.
-It requires controls at two or more HPI values per group.
-It interpolates control medians across HPI and smooths them with Gaussian sigma 1 using nearest boundaries.
-It subtracts these centers and scales by `1.4826 * MAD` of control residuals across HPI.
+Select the temporal grouping in the phenotype configuration:
+
+```yaml
+normalization:
+  mode: per_timepoint  # Alternatives: pooled, time_matched.
+```
+
+| Mode | Center and scale | Required controls |
+| --- | --- | --- |
+| `per_timepoint` | Control median and `1.4826 * MAD` fitted separately at each exact HPI. No smoothing or interpolation. | Controls at every observed HPI. |
+| `pooled` | One control median and `1.4826 * MAD` across all control observations in the group. | Controls somewhere within the group. |
+| `time_matched` | Default paper recipe: smoothed temporal centers and pooled residual MAD. | Controls at two or more HPI values. |
+
+Pooled normalization weights each control observation equally; timepoints with more controls contribute more observations.
+The paper recipe interpolates control medians across HPI and smooths them with Gaussian sigma 1 using nearest boundaries.
+It scales centered embeddings by `1.4826 * MAD` of control residuals pooled across HPI.
 The scale floor is the first percentile of positive MAD values.
-Missing controls or all-zero MAD values fail normalization.
+Each fitted scale uses its own floor; missing required controls or all-zero MAD values fail normalization.
+Both new modes support a single timepoint when controls have nonzero variation.
+Raw embeddings remain unchanged.
+`normalization.json` records the mode, reference timepoints, fitted centers, scales and control counts.
+Each pooled fit stores one center and scale; each per-timepoint fit stores its own center and scale.
+Saved normalization from another mode is rejected.
+Start from the raw embedding output or explicitly rerun `normalize` when changing modes.
 
 PCA fits each marker separately and retains at least 80% of variance.
 Conditions and timepoints share that marker's fit.
 MMD compares all treated cells with controls from the same experiment, control group and exact HPI.
+This matching rule also applies when normalization pools controls across timepoints.
 It uses one median bandwidth per marker.
 UMAP provides visualization coordinates only.
 

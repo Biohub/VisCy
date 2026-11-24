@@ -1,4 +1,4 @@
-"""Persist the paper control median/MAD representation without replacing encoder X."""
+"""Persist control median/MAD representations without replacing encoder X."""
 
 import hashlib
 import json
@@ -9,6 +9,21 @@ import pandas as pd
 NORMALIZED_KEY = "X_control_mad"
 CONTRACT_KEY = "organelle_normalization"
 RECIPE = "time_matched_control_median_mad_v1"
+RECIPES = {
+    "time_matched": RECIPE,
+    "per_timepoint": "per_timepoint_control_median_mad_v1",
+    "pooled": "pooled_control_median_mad_v1",
+}
+
+
+def normalization_mode(m):
+    settings = m.get("normalization", {})
+    if not isinstance(settings, dict) or set(settings) - {"mode"}:
+        raise ValueError("normalization must be a mapping with only the mode option")
+    mode = settings.get("mode", "time_matched")
+    if not isinstance(mode, str) or mode not in RECIPES:
+        raise ValueError(f"normalization.mode must be one of {', '.join(RECIPES)}")
+    return mode
 
 
 def array_checksum(x):
@@ -26,20 +41,46 @@ def source_checksum(data, m):
     obs[columns[-1]] = obs[columns[-1]].astype(float)
     digest = hashlib.sha256(array_checksum(data.X).encode())
     digest.update(pd.util.hash_pandas_object(obs, index=False).to_numpy().tobytes())
-    digest.update(json.dumps([RECIPE, m["feature_space"], m["control_label"]]).encode())
+    digest.update(json.dumps([RECIPES[normalization_mode(m)], m["feature_space"], m["control_label"]]).encode())
     return digest.hexdigest()
 
 
-def control_normalize(x, obs, control, *, contracts=None):
-    """Paper control centering/MAD recipe, independently per acquisition group."""
+def control_normalize(x, obs, control, *, contracts=None, mode="time_matched"):
+    """Fit controls per acquisition, optionally splitting or pooling timepoints."""
     from scipy.ndimage import gaussian_filter1d
 
+    normalization_mode({"normalization": {"mode": mode}})
     x = np.asarray(x, dtype=np.float32).copy()
     for key, group in obs.groupby(["experiment", "control_group"]):
         rows = group.index.to_numpy()
         times = group.hours_post_perturbation.to_numpy(float)
         is_control = group.perturbation.eq(control).to_numpy()
         grid = np.unique(times)
+        if mode != "time_matched":
+            subsets = [times == time for time in grid] if mode == "per_timepoint" else [np.ones(len(rows), bool)]
+            for subset in subsets:
+                controls = x[rows[is_control & subset]]
+                if not len(controls):
+                    raise ValueError(f"Missing controls for group {key} at HPI {np.unique(times[subset]).tolist()}")
+                center = np.median(controls, axis=0)
+                scale = 1.4826 * np.median(np.abs(controls - center), axis=0)
+                positive = scale[scale > 0]
+                if not len(positive):
+                    raise ValueError(f"Every control dimension has zero MAD for group {key}")
+                scale = np.maximum(scale, np.quantile(positive, 0.01))
+                x[rows[subset]] = (x[rows[subset]] - center) / scale
+                if contracts is not None:
+                    contracts.append(
+                        dict(
+                            experiment=str(key[0]),
+                            control_group=str(key[1]),
+                            hpi_grid=np.unique(times[subset]),
+                            control_centers=center[None, :],
+                            control_mad=scale,
+                            n_control=int(len(controls)),
+                        )
+                    )
+            continue
         centers = np.full((len(grid), x.shape[1]), np.nan, dtype=np.float32)
         for i, time in enumerate(grid):
             take = is_control & (times == time)
@@ -75,30 +116,33 @@ def control_normalize(x, obs, control, *, contracts=None):
 
 def normalize_embeddings(data, m):
     """Fit each marker/acquisition's own controls, always starting from raw X."""
+    mode = normalization_mode(m)
     normalized = np.empty(data.shape, dtype=np.float32)
     groups = {}
     for marker in sorted(data.obs.marker.unique()):
         rows = np.flatnonzero(data.obs.marker.eq(marker))
         contracts = []
         normalized[rows] = control_normalize(
-            data.X[rows], data.obs.iloc[rows].reset_index(drop=True), m["control_label"], contracts=contracts
+            data.X[rows], data.obs.iloc[rows].reset_index(drop=True), m["control_label"], contracts=contracts, mode=mode
         )
         for contract in contracts:
             contract["marker"] = str(marker)
             groups[str(len(groups))] = contract
     data.obsm[NORMALIZED_KEY] = normalized
     data.uns[CONTRACT_KEY] = dict(
-        recipe=RECIPE,
+        recipe=RECIPES[mode],
+        mode=mode,
         source_checksum=source_checksum(data, m),
         normalized_checksum=array_checksum(normalized),
         control_label=m["control_label"],
         feature_space=m["feature_space"],
         source="X",
         output=f"obsm/{NORMALIZED_KEY}",
-        smooth_sigma_timepoints=1.0,
+        smooth_sigma_timepoints=1.0 if mode == "time_matched" else 0.0,
         mad_scale_factor=1.4826,
         mad_floor_quantile=0.01,
-        group_by=["marker", "experiment", "control_group"],
+        group_by=["marker", "experiment", "control_group"]
+        + (["hours_post_perturbation"] if mode == "per_timepoint" else []),
         groups=groups,
     )
 
@@ -108,7 +152,8 @@ def require_normalized(data, m):
     contract = data.uns.get(CONTRACT_KEY, {})
     if (
         NORMALIZED_KEY not in data.obsm
-        or contract.get("recipe") != RECIPE
+        or contract.get("recipe") != RECIPES[normalization_mode(m)]
+        or contract.get("mode", "time_matched") != normalization_mode(m)
         or contract.get("source_checksum") != source_checksum(data, m)
         or contract.get("normalized_checksum") != array_checksum(data.obsm[NORMALIZED_KEY])
     ):

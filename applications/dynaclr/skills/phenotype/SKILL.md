@@ -29,7 +29,17 @@ dynacell phenotype --config /path/to/phenotype.yml --output results/phenotype
 ```
 
 Use each marker, experiment and control group's own controls.
-Require controls at two or more HPI values per group.
+Set `normalization.mode` from the requested comparison:
+
+| Mode | Control reference |
+| --- | --- |
+| `per_timepoint` | Separate median and MAD at every timepoint; controls must exist at each timepoint. |
+| `pooled` | One median and MAD from all control observations across timepoints within each group. |
+| `time_matched` | Default paper recipe: smoothed temporal centers and pooled residual MAD; requires controls at two or more timepoints. |
+
+Use `per_timepoint` or `pooled` for single-timepoint data.
+Keep the default when reproducing the existing paper results.
+Start from raw embeddings when changing modes.
 Preserve raw embeddings alongside normalized embeddings.
 Compare all treated cells with matched controls, independently of classifier predictions.
 Keep model feature spaces separate.
