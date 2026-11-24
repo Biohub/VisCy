@@ -7,10 +7,10 @@
 #   - within_mantis_v1/  : the lone 0.1494 um/px dataset (2024_11_07) — skipped
 #                          (degenerate: needs >=2 datasets)
 #   - cross_mantis_v1__mantis_v2/ : v1 vs v2 (only SEC61B is on both platforms) —
-#                          this block IS the cross-platform batch effect LOT corrects.
+#                          this block IS the cross-platform batch effect.
 #
 # Requires obs["microscope"] on the embeddings (enrich-obs-from-collection from a
-# collection that carries the microscope field). Detects/reports only; LOT corrects.
+# collection that carries the microscope field). Detects/reports only.
 #
 # Run:
 #   dynaclr embedding-consistency-qc -c recipes/embedding_consistency_qc_organelle_box.yml

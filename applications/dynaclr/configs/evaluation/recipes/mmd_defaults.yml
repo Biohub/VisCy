@@ -15,7 +15,7 @@ group_by: perturbation
 save_plots: true
 
 # Default biological-effect representation. Per-experiment and --pooled MMD
-# use this; --combined/--over-time batch-effect modes remain in their supplied
+# use this; the --combined batch-effect mode remains in their supplied
 # coordinate system so normalization cannot erase the batch effect under test.
 representation:
   normalization: control_mad

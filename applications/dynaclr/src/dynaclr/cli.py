@@ -380,22 +380,6 @@ dynaclr.add_command(
 
 dynaclr.add_command(
     LazyCommand(
-        name="fit-lot-correction",
-        import_path="dynaclr.evaluation.lot_correction.fit_lot_correction.main",
-        short_help="Fit a LOT batch-correction pipeline on source and target embedding zarrs",
-    )
-)
-
-dynaclr.add_command(
-    LazyCommand(
-        name="apply-lot-correction",
-        import_path="dynaclr.evaluation.lot_correction.apply_lot_correction.main",
-        short_help="Apply a fitted LOT pipeline to correct batch effects in an embedding zarr",
-    )
-)
-
-dynaclr.add_command(
-    LazyCommand(
         name="predict-triplet",
         import_path="dynaclr.evaluation.predict_triplet.main",
         short_help="Per-reporter triplet embedding inference from a collection + checkpoint",

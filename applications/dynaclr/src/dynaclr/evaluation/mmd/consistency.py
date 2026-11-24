@@ -5,7 +5,7 @@ cells, so batch effects between acquisitions can be read at a glance:
 
 - **MMD²** (primary, distributional): aggregates the long-form pairwise output
   of :func:`dynaclr.evaluation.mmd.compute_mmd.run_mmd_combined`. Sensitive to
-  differences in mean, spread, and shape — the same statistic LOT validation
+  differences in mean, spread, and shape — the same statistic batch-correction validation
   uses. Low off-diagonal = comparable; large off-diagonal = batch effect.
 - **Pearson correlation** (companion, cheap/readable): correlation between
   per-dataset mean control embeddings. Bounded ``[-1, 1]`` and easy to read, but
@@ -13,12 +13,11 @@ cells, so batch effects between acquisitions can be read at a glance:
 - **Fréchet distance** (mean + covariance): 2-Wasserstein between Gaussian
   summaries of each dataset's control cells (the FID statistic). Uses the first
   *two* moments — richer than Pearson-of-means, cheaper than full-distribution
-  MMD, and exactly the mean + covariance shift LOT correction removes.
+  MMD, and exactly the mean + covariance shift a batch correction removes.
 
 Inputs are enumerated via :func:`dynaclr.evaluation.paths.iter_embeddings`; the
 QC reuses ``run_mmd_combined`` verbatim and adds the matrix pivots, plotting, and
-the glob-driven driver. It detects and reports — it does not correct (see
-``lot_correction``).
+the glob-driven driver. It detects and reports — it does not correct.
 """
 
 from __future__ import annotations
@@ -315,7 +314,7 @@ def _frechet_distance(mu_a: np.ndarray, cov_a: np.ndarray, mu_b: np.ndarray, cov
     """Fréchet (2-Wasserstein between Gaussians) distance between two moment sets.
 
     ``FD² = ||mu_a - mu_b||² + Tr(cov_a + cov_b - 2 (cov_a cov_b)^½)`` — the same
-    statistic as FID, and exactly the mean + covariance shift LOT corrects. The
+    statistic as FID, and exactly the mean + covariance shift a batch correction targets. The
     matrix square root of the (symmetric PSD) product ``cov_a cov_b`` is taken via
     an eigendecomposition of the symmetrized product with negatives clipped to 0
     (numerical guard), avoiding a scipy ``sqrtm`` dependency.
@@ -353,7 +352,7 @@ def frechet_matrix_per_marker(
     (see :func:`_frechet_distance`) between the two datasets' Gaussian summaries.
     Richer than the Pearson-of-means companion (it uses the second moment) and
     cheaper than the full-distribution MMD (closed form, no permutation test) —
-    and it is precisely the mean + covariance shift LOT correction removes.
+    and it is precisely the mean + covariance shift a batch correction removes.
 
     Parameters
     ----------

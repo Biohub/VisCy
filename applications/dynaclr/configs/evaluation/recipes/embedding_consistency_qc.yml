@@ -5,7 +5,7 @@
 #   {datasets_root}/*/2-phenotyping/predictions/{model_family}/{run}/{ckpt_name}/{marker}.zarr)
 # and reports two symmetric per-marker matrices + heatmaps:
 #   - MMD² (primary, distributional): low off-diagonal = comparable; large =
-#     batch effect to correct with LOT. Same statistic LOT validation uses.
+#     batch effect to correct.
 #   - Pearson correlation of per-dataset mean embeddings (companion, [-1,1],
 #     readable but centroid-only — a fast sanity check, blind to spread/shape).
 #

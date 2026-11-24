@@ -1,0 +1,26 @@
+# TODO comments identify values to supply or check before execution.
+# The agent resolves paths and calculates hashes from supplied files.
+schema_version: 1
+root: .  # TODO: Set the base directory for relative input paths.
+model_family: dynacell
+inference_recipe: training
+# TODO: Select the checkpoint for the requested marker and representation.
+checkpoint: models/selected_representation.ckpt
+# TODO (agent): Calculate SHA-256 from the checkpoint file.
+checkpoint_sha256: replace-with-checkpoint-sha256
+# TODO: Supply the matching model and image preprocessing recipe.
+training_config: models/selected_training_config.yaml
+# TODO: Supply the canonical cell table, or replace cell_index with labels using CONTRACT.md.
+cell_index: cells.parquet
+# TODO (agent): Record checkpoint, preprocessing and features/projections identity.
+# Reuse this identity in phenotype.
+feature_space: replace-with-checkpoint-preprocessing-and-output-identity
+control_label: uninfected  # TODO: Confirm the exact control value in the perturbation column.
+# Optional runtime settings; adjust batch_size and num_workers for available hardware.
+predict:
+  batch_size: 32
+  num_workers: 0
+  precision: 32-true
+  embedding_key: features  # TODO: Confirm features or the trained projections representation.
+# Select projections only when the requested representation uses a trained projection head.
+# Use model_family: dynaclr and inference_recipe: paper for the verified paper encoder.
