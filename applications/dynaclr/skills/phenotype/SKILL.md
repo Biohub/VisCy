@@ -6,8 +6,9 @@ description: Normalize embeddings against matched controls and generate UMAP plo
 Read the [analysis contract](../../examples/organelle_dynamics/CONTRACT.md#analysis).
 Use the environment setup on the [start page](../../examples/organelle_dynamics/README.md#run).
 Set `embeddings` to the embed output's `predictions.zarr`.
-Request a completed configuration if none is available.
-Offer the phenotype template for the user to complete.
+Use a supplied configuration, or complete the phenotype template from the embedding output and experimental metadata.
+Copy `feature_space` from `uns/organelle_feature_space` or the embedding run’s resolved configuration.
+Resolve TODO fields; omit metadata and timing defaults when the input already supplies those columns.
 Accept any YAML filename and check for unresolved placeholders.
 Use [data preparation](../../examples/organelle_dynamics/CONTRACT.md#prepare-external-data) for external embeddings or missing metadata.
 Ask for control identities and time references when the supplied data does not establish them.
@@ -46,6 +47,7 @@ Keep model feature spaces separate.
 Report insufficient-cell status rows.
 Describe subsampling bands as stability intervals.
 
+Run the CLI after resolving required inputs and report output paths and validation results.
 Optional trusted classifiers consume compatible raw embeddings.
 Keep treatment, annotation and prediction fields separate.
 Use `normalize` or `plot` commands when only an intermediate output is needed.

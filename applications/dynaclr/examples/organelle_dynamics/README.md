@@ -19,15 +19,26 @@ flowchart LR
 
 Run commands from the VisCy repository root.
 
-Give the agent your completed configuration and data paths.
-If no configuration exists, the agent requests one using the appropriate template:
+Give the agent data paths and an existing configuration, if available.
+Otherwise, the agent completes the appropriate template from your files and experimental facts:
 
 - [DynaCell/DynaCLR](embed_dynacell.yaml) or [CELL-DINO](embed_cell_dino.yaml) for embedding.
 - [Phenotype](phenotype.yaml) for population analysis.
 
-Fill the template's paths, metadata and checkpoint identity.
+TODO comments mark fields that need supplied values or checks.
+Optional comments identify settings with usable defaults.
 Any YAML filename works; copying or renaming it is optional.
-The agent checks required fields and unresolved placeholders before execution.
+
+| Responsibility | Work |
+| --- | --- |
+| Human | Supply inaccessible data paths, checkpoint preferences and experimental facts absent from metadata. |
+| Agent | Inspect files, prepare supported inputs, complete YAML, calculate checkpoint hashes, validate inputs and run commands. |
+| CLI | Execute inference or analysis from completed YAML and write outputs. It does not ask questions or resolve TODO comments. |
+
+The agent asks only for unresolved facts, including control identities, replicate assignments and experimental timing.
+The agent copies phenotype `feature_space` from embedding output; it does not ask you to calculate SHA-256.
+You can also complete the YAML and run the commands directly without an agent.
+The runner rejects `replace-with-...` placeholders; comments and plausible example values do not trigger validation.
 For other data formats, follow [data preparation](CONTRACT.md#prepare-external-data).
 For nuclear labels without tracking, use the [label-input configuration](CONTRACT.md#data-without-tracking) with the same `embed` command.
 

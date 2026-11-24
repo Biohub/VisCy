@@ -1,19 +1,27 @@
+# TODO comments identify values to supply or check before execution.
+# The agent fills values from supplied files and asks for missing experimental facts.
 schema_version: 1
-root: .
-feature_space: replace-with-encoder-sha256
-embeddings: results/embed/predictions.zarr
-control_label: uninfected
+root: .  # TODO: Set the base directory for relative input paths.
+# TODO: Copy the embed output's uns/organelle_feature_space or resolved_manifest.yaml feature_space.
+# This identifies checkpoint, preprocessing and output representation; it is not just a checkpoint hash.
+feature_space: replace-with-embed-feature-space-identity
+embeddings: results/embed/predictions.zarr  # TODO: Set the raw embedding output path.
+control_label: uninfected  # TODO: Confirm the exact control value in the perturbation column.
 normalization:
-  mode: per_timepoint  # Default; use pooled to combine controls across timepoints.
+  mode: per_timepoint  # Optional: Use pooled to combine controls across timepoints.
+# TODO: Keep only aliases needed by your input; omit columns for canonical metadata.
 columns:
   source_cell_id: cell_id
+# TODO: Replace these examples only for missing columns with constant values; otherwise omit metadata.
+# Supply experiment/marker/perturbation per observation, not inferred from paths.
 metadata:
   control_group: acquisition-1
   replicate: biological-replicate-1
-# Supply experiment/marker/perturbation per observation, not inferred from paths.
+# TODO: Supply actual timing only when hours_post_perturbation is absent; otherwise omit timing.
 timing:
   interval_minutes: 30
   first_frame_hpi: 3
+# Optional analysis settings; these defaults do not require replacement.
 analysis:
   seed: 42
   min_cells: 20
