@@ -2,6 +2,8 @@
 
 ## Quick start
 
+- [Embed and phenotype](organelle_dynamics/README.md) — Extract embeddings, normalize against controls, and generate UMAP and MMD outputs.
+
 - [quickstart/](quickstart/) — Get started with model inference in Python
 
 ## Demos

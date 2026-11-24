@@ -18,7 +18,7 @@ from dynaclr.evaluation.organelle_workflow import validate_cells
 def verify(output: Path, per_condition: int = 8):
     from iohub.ngff import open_ome_zarr
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/evaluation"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts/evaluation"))
     import analyze_direct_pal_aligned_organelle_mmd as paper
 
     output.mkdir(parents=True, exist_ok=False)

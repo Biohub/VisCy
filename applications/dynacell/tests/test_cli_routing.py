@@ -1,6 +1,7 @@
 """Tests for dynacell CLI subcommand routing."""
 
 import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,32 @@ from dynacell.__main__ import (
 
 class TestCliRouting:
     """Tests for the main_cli router."""
+
+    @pytest.mark.parametrize("command", ["embed", "phenotype"])
+    def test_profiler_preserves_arguments_and_uses_current_python(self, command):
+        args = [command, "--config", "experiment with spaces.yml", "--output", "results/run"]
+        with (
+            patch("sys.argv", ["dynacell", *args]),
+            patch("importlib.util.find_spec", return_value=object()),
+            patch("os.execv") as execute,
+        ):
+            main_cli()
+        execute.assert_called_once_with(
+            sys.executable,
+            [sys.executable, "-m", "dynaclr.evaluation.organelle_workflow", *args],
+        )
+
+    def test_profiler_missing_package_exits_with_install_hint(self, capsys):
+        with (
+            patch("sys.argv", ["dynacell", "phenotype"]),
+            patch("importlib.util.find_spec", return_value=None),
+            patch("os.execv") as execute,
+            pytest.raises(SystemExit) as error,
+        ):
+            main_cli()
+        assert error.value.code == 1
+        assert "dynacell[profiler]" in capsys.readouterr().err
+        execute.assert_not_called()
 
     def test_lightning_commands_delegate_to_viscy(self):
         """fit/predict/validate fall through to viscy_utils.cli.main."""

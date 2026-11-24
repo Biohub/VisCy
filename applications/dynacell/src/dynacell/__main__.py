@@ -3,6 +3,7 @@
 Routes Lightning subcommands (fit, predict, test, validate) to
 ``viscy_utils.cli.main()`` and Hydra subcommands (evaluate, report)
 to their respective entry points.
+Routes embed and phenotype to the DynaCLR profiling CLI in the current environment.
 
 Usage
 -----
@@ -10,9 +11,12 @@ cd applications/dynacell/configs/examples
 uv run dynacell fit -c unetvit3d/fit.yml
 uv run dynacell evaluate io.pred_path=... target_name=sec61b
 uv run dynacell report results_dirs.ModelA=/path/to/results
+dynacell embed --config embedding.yml --output results/embed
+dynacell phenotype --config phenotype.yml --output results/phenotype
 """
 
 import importlib
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -107,6 +111,17 @@ def _inject_external_configs(argv: list[str]) -> list[str]:
 
 def main_cli():
     """Console script entry point for ``dynacell`` command."""
+    if len(sys.argv) >= 2 and sys.argv[1] in {"embed", "phenotype"}:
+        # Execute the owning application's CLI without importing across apps.
+        if importlib.util.find_spec("dynaclr") is None:
+            print("Install profiling dependencies: pip install 'dynacell[profiler]'", file=sys.stderr)
+            raise SystemExit(1)
+        os.execv(
+            sys.executable,
+            [sys.executable, "-m", "dynaclr.evaluation.organelle_workflow", *sys.argv[1:]],
+        )
+        return
+
     # Apply BLAS/OMP env caps BEFORE any torch/numpy import. The import below
     # is stdlib + threadpoolctl only — no torch — so the env vars set here
     # bite at first BLAS C-extension load, which happens transitively when

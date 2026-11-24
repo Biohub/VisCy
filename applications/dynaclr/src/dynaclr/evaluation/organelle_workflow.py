@@ -1,4 +1,4 @@
-"""Portable organelle analysis bundles. Run with python -m ...organelle_workflow."""
+"""Portable cell embedding and phenotyping bundles."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import anndata as ad
@@ -14,7 +15,6 @@ import pandas as pd
 import yaml
 from sklearn.decomposition import PCA
 
-from dynaclr.evaluation.organelle_cells import TIMING_HELP, cells_from_labels, require_timing, tracks_from_labels
 from dynaclr.evaluation.organelle_normalization import (
     CONTRACT_KEY,
     export_embeddings,
@@ -34,6 +34,23 @@ def sha256(path):
 def load_manifest(path):
     path = Path(path).resolve()
     m = yaml.safe_load(path.read_text())
+    if not isinstance(m, dict):
+        raise ValueError("Configuration must be a YAML mapping")
+    unfinished = []
+
+    def check_placeholders(value, key=""):
+        if isinstance(value, dict):
+            for name, item in value.items():
+                check_placeholders(item, f"{key}.{name}" if key else str(name))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                check_placeholders(item, f"{key}[{index}]")
+        elif isinstance(value, str) and value.startswith("replace-with-"):
+            unfinished.append(key)
+
+    check_placeholders(m)
+    if unfinished:
+        raise ValueError(f"Complete the configuration fields before running: {', '.join(unfinished)}")
     if m.get("schema_version") != 1:
         raise ValueError("schema_version must be 1")
     root = (path.parent / m.get("root", ".")).resolve()
@@ -42,7 +59,7 @@ def load_manifest(path):
             m[key] = str((root / m[key]).resolve())
     for model in m.get("classifiers", []):
         model["path"] = str((root / model["path"]).resolve())
-    if m.get("labels", {}).get("store"):
+    if m.get("labels"):
         m["labels"]["store"] = str((root / m["labels"]["store"]).resolve())
     return m
 
@@ -54,8 +71,8 @@ def canonical_obs(frame, m):
         if key not in frame:
             frame[key] = value
     if "hours_post_perturbation" not in frame and "timing" in m:
-        first_frame_hpi, interval_minutes = require_timing(m)
-        frame["hours_post_perturbation"] = frame["t"] * interval_minutes / 60 + first_frame_hpi
+        timing = m["timing"]
+        frame["hours_post_perturbation"] = frame["t"] * timing["interval_minutes"] / 60 + timing["first_frame_hpi"]
     required = [
         "cell_id",
         "experiment",
@@ -67,8 +84,7 @@ def canonical_obs(frame, m):
     ]
     missing = set(required) - set(frame)
     if missing:
-        hint = f" {TIMING_HELP}" if "hours_post_perturbation" in missing else ""
-        raise ValueError(f"Missing metadata: {sorted(missing)}.{hint}")
+        raise ValueError(f"Missing metadata: {sorted(missing)}")
     if frame[required].isna().any().any():
         raise ValueError("Required metadata contains null values")
     if frame.duplicated(["experiment", "cell_id", "marker"]).any():
@@ -93,8 +109,8 @@ def validate_cells(frame, normalization_level="timepoint_statistics"):
                     stats = stats.get(str(int(row.t)))
                 if not stats or not np.isfinite(stats.get("std", np.nan)) or stats["std"] <= 0:
                     raise ValueError(
-                        f"Missing or invalid {normalization_level} for channel {row.channel_name!r} in "
-                        f"{store}/{well}/{fov}; normalization metadata has channels {sorted(normalization)}"
+                        f"{store}/{well}/{fov}: missing or invalid {normalization_level} for "
+                        f"channel {row.channel_name!r}, frame {row.t}; available channels: {list(normalization)}"
                     )
                 for name in ["mean", "std", "median", "iqr", "min", "max"]:
                     frame.loc[index, "norm_" + name] = stats[name]
@@ -116,29 +132,74 @@ def validate_cells(frame, normalization_level="timepoint_statistics"):
         raise ValueError("Frame indices must be integers")
 
 
+def prediction_model_config(m):
+    """Select local foundation weights or a Lightning checkpoint without mixing loaders."""
+    config = yaml.safe_load(Path(m["training_config"]).read_text())
+    checkpoint = str(Path(m["checkpoint"]).resolve())
+    if m.get("model_family", "dynaclr") != "cell_dino":
+        return config, checkpoint
+    model = config["model"]["init_args"]
+    encoder = model["encoder"]
+    if encoder["class_path"] not in (
+        "viscy_models.foundation.cell_dino.CellDinoModel",
+        "viscy_models.foundation.CellDinoModel",
+    ):
+        raise ValueError("CELL-DINO requires a CellDinoModel encoder in training_config")
+    if model.get("ckpt_path"):
+        raise ValueError("CELL-DINO frozen inference cannot also restore a Lightning checkpoint")
+    if encoder.get("init_args", {}).get("projection") is not None:
+        raise ValueError("Use a trained representation checkpoint for a CELL-DINO projection head")
+    encoder.setdefault("init_args", {})["weights_path"] = checkpoint
+    return config, None
+
+
 def infer(m, output):
     """Reuse the production prediction configuration generator, with explicit outputs."""
     from dynaclr.evaluation.evaluate import _generate_predict_yaml
     from dynaclr.evaluation.evaluate_config import EvaluationConfig
 
-    cells = canonical_obs(pd.read_parquet(m["cell_index"]), m)
-    recipe = m.get("inference_recipe", "paper")
+    family = m.get("model_family", "dynaclr")
+    if family not in ("dynaclr", "dynacell", "cell_dino"):
+        raise ValueError("model_family must be dynaclr, dynacell or cell_dino")
+    recipe = m.get("inference_recipe", "paper" if family == "dynaclr" else "training")
+    if family == "cell_dino" and recipe != "training":
+        raise ValueError("CELL-DINO requires its training_config preprocessing recipe")
+    if recipe == "paper" and m.get("predict", {}).get("embedding_key", "features") != "features":
+        raise ValueError("The paper recipe exports features; use training for projection embeddings")
     if recipe not in ("paper", "training"):
         raise ValueError("inference_recipe must be paper or training")
-    validate_cells(cells, "fov_statistics" if recipe == "paper" else "timepoint_statistics")
-    cells.to_parquet(output / "cells.parquet", index=False)
     checkpoint = Path(m["checkpoint"])
     if sha256(checkpoint) != m["checkpoint_sha256"]:
         raise ValueError("Encoder checksum mismatch")
+    if recipe == "training":
+        training_cfg, lightning_checkpoint = prediction_model_config(m)
+    if m.get("labels"):
+        from dynaclr.evaluation.organelle_cells import cells_from_labels
+
+        data_init = training_cfg["data"]["init_args"] if recipe == "training" else None
+        cells = canonical_obs(cells_from_labels(m, output, data_init), m)
+        m = dict(
+            m,
+            input_preparation=dict(
+                track_identity="independent_instances",
+                cell_index="cells.parquet",
+                summary="cells_summary.json",
+                tracks="tracks",
+            ),
+        )
+    else:
+        cells = canonical_obs(pd.read_parquet(m["cell_index"]), m)
+    validate_cells(cells, "fov_statistics" if recipe == "paper" else "timepoint_statistics")
+    cells.to_parquet(output / "cells.parquet", index=False)
     if recipe == "paper":
         from dynaclr.evaluation.organelle_inference import predict_paper_cells
 
         destination = predict_paper_cells(cells, checkpoint, output, m.get("predict", {}).get("batch_size", 32))
-        return dict(m, embeddings=str(destination), inference_recipe="paper")
+        return dict(m, embeddings=str(destination), model_family=family, inference_recipe="paper")
     config = EvaluationConfig.model_validate(
         dict(
             training_config=m["training_config"],
-            ckpt_path=str(checkpoint),
+            ckpt_path=lightning_checkpoint,
             cell_index_path=str(output / "cells.parquet"),
             output_dir=str(output),
             steps=["predict"],
@@ -146,8 +207,9 @@ def infer(m, output):
         )
     )
     (output / "configs").mkdir()
-    cfg = _generate_predict_yaml(config, yaml.safe_load(Path(m["training_config"]).read_text()), output)
+    cfg = _generate_predict_yaml(config, training_cfg, output)
     resolved = yaml.safe_load(cfg.read_text())
+    resolved["trainer"]["default_root_dir"] = str(output)
     if config.predict.num_workers == 0:
         resolved["data"]["init_args"]["prefetch_factor"] = None
     init = resolved["data"]["init_args"]
@@ -158,8 +220,23 @@ def infer(m, output):
         if ((cells[axis] < half) | (cells[axis] + half > cells[axis.upper() + "_shape"])).any():
             raise ValueError("Cell crop crosses image boundary; filter boundary cells explicitly before inference")
     cfg.write_text(yaml.safe_dump(resolved, sort_keys=False))
-    subprocess.run(["viscy", "predict", "-c", str(cfg)], check=True)
-    m = dict(m, embeddings=str(output / "embeddings/embeddings.zarr"))
+    (output / "inference_recipe.json").write_text(
+        json.dumps(
+            dict(
+                name=recipe,
+                model_family=family,
+                checkpoint_sha256=m["checkpoint_sha256"],
+                training_config_sha256=sha256(m["training_config"]),
+                embedding_key=config.predict.embedding_key,
+                resolved_config="configs/predict.yml",
+            ),
+            indent=2,
+        )
+        + "\n"
+    )
+    executable = Path(sys.executable).with_name("viscy")
+    subprocess.run([str(executable) if executable.exists() else "viscy", "predict", "-c", str(cfg)], check=True)
+    m = dict(m, embeddings=str(output / "embeddings/embeddings.zarr"), model_family=family, inference_recipe=recipe)
     return m
 
 
@@ -330,69 +407,28 @@ def analyze(data, m, output, *, plot_only=False):
     return settings
 
 
-STAGES = ("cells-from-labels", "tracks-from-labels", "infer", "normalize", "plot", "analyze")
-
-
 def run(manifest, output, stage):
     # AnnData's installed writer predates pandas Arrow-string inference.
     with pd.option_context("future.infer_string", False):
         return _run(manifest, output, stage)
 
 
-def build_cells(m, output):
-    """Write an untracked cell index from nuclear-label centroids, validated for infer."""
-    cells, excluded = cells_from_labels(m)
-    cells = canonical_obs(cells, m)
-    validate_cells(cells.copy(), "fov_statistics")
-    cells.to_parquet(output / "cells.parquet", index=False)
-    excluded.to_parquet(output / "excluded_cells.parquet", index=False)
-    counts = cells.groupby(["marker", "perturbation", "hours_post_perturbation"]).size()
-    summary = dict(
-        cells=len(cells),
-        excluded=excluded.exclusion_reason.value_counts().to_dict(),
-        per_marker_perturbation_hpi=[dict(zip(counts.index.names, k), n=int(n)) for k, n in counts.items()],
-    )
-    (output / "cells_summary.json").write_text(json.dumps(summary, indent=2, default=str))
-    return summary
-
-
-def _write_provenance(output, m, stage, **extra):
-    provenance = dict(
-        schema_version=1,
-        manifest=m,
-        stage=stage,
-        git_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        **extra,
-    )
-    (output / "provenance.json").write_text(json.dumps(provenance, indent=2, default=str))
-    (output / "artifacts.json").write_text(json.dumps(sorted(p.name for p in output.iterdir()), indent=2))
-
-
 def _run(manifest, output, stage):
-    if stage not in STAGES:
+    requested_stage = stage
+    stage = {"embed": "infer", "phenotype": "analyze"}.get(stage, stage)
+    if stage not in ("infer", "normalize", "plot", "analyze"):
         raise ValueError(f"Unknown stage: {stage}")
     m = load_manifest(manifest)
+    if requested_stage == "embed" and m.get("classifiers"):
+        raise ValueError("embed performs inference only; put classifiers in the phenotype manifest")
+    if stage == "infer" and bool(m.get("cell_index")) == bool(m.get("labels")):
+        raise ValueError("Supply exactly one of cell_index or labels for embedding inference")
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "resolved_manifest.yaml").write_text(yaml.safe_dump(m))
-    if stage == "cells-from-labels":
-        summary = build_cells(m, output)
-        _write_provenance(output, m, stage, cells=summary, track_identity="none; nucleus labels are per-frame")
-        return
-    if stage == "tracks-from-labels":
-        counts = tracks_from_labels(m["labels"]["store"], m["labels"].get("label", "nuclei"), output / "tracks")
-        summary = dict(fovs=len(counts), observations=sum(counts.values()), per_fov=counts)
-        (output / "tracks_summary.json").write_text(json.dumps(summary, indent=2))
-        _write_provenance(
-            output,
-            m,
-            stage,
-            tracks=dict(fovs=summary["fovs"], observations=summary["observations"]),
-            track_identity="pseudo; track_id is the per-frame nucleus label",
-        )
-        return
     if stage == "infer":
         m = infer(m, output)
+        (output / "resolved_manifest.yaml").write_text(yaml.safe_dump(m))
     data = ad.read_zarr(m["embeddings"])
     if stage == "infer":
         cells = pd.read_parquet(output / "cells.parquet")
@@ -421,7 +457,8 @@ def _run(manifest, output, stage):
     existing_space = data.uns.get("organelle_feature_space")
     if existing_space is not None and existing_space != m["feature_space"]:
         raise ValueError("Embedding feature space mismatch")
-    classify(data, m)
+    if requested_stage != "embed":
+        classify(data, m)
     normalized = False
     if stage == "normalize":
         normalize_embeddings(data, m)
@@ -444,22 +481,25 @@ def _run(manifest, output, stage):
     store = "normalized.zarr" if stage == "normalize" else "predictions.zarr"
     data.write_zarr(output / store, convert_strings_to_categoricals=False)
     settings = analyze(data, m, output, plot_only=stage == "plot") if stage in ("analyze", "plot") else {}
-    _write_provenance(
-        output,
-        m,
-        stage,
+    provenance = dict(
+        schema_version=1,
+        manifest=m,
         analysis=settings,
+        stage=requested_stage,
         representation=settings.get("representation", "control_mad" if normalized else "encoder X"),
-        cohort="all treated observations",
+        cohort="supplied observations" if requested_stage == "embed" else "all treated observations",
         sampling_unit=settings.get("sampling_unit", "observation"),
         interval="subsampling stability; not biological replicate confidence",
+        git_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
     )
+    (output / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    (output / "artifacts.json").write_text(json.dumps(sorted(p.name for p in output.iterdir()), indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=STAGES)
-    parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("stage", choices=["embed", "phenotype", "infer", "normalize", "plot", "analyze"])
+    parser.add_argument("--config", "-c", "--manifest", dest="manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     run(args.manifest, args.output, args.stage)

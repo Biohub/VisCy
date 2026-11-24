@@ -1,57 +1,286 @@
-# Organelle workflow contract v1
+# Input and output contract
 
-Start with the [workflow README](README.md) for the skill list, inputs and commands. This document specifies the detailed data contract.
+Use the [start page](README.md) for commands and file navigation.
 
-Skills live under `applications/dynaclr/skills/`; install or point your agent at their SKILL.md files. Run commands from the VisCy root. Sync the locked environment once (`uv sync --locked --package dynaclr --extra eval`); use `uv run --no-sync` during jobs.
+## Inputs
 
-A YAML manifest has `schema_version: 1`, `root` (relative to the manifest), `feature_space` (immutable encoder identity), `control_label`, and `embeddings` for normalization, plotting or cached analysis. AnnData X must contain raw encoder vectors; normalization never replaces X. Paths resolve against root. `columns` maps source column names to canonical names; `metadata` supplies explicit constants only for absent columns.
+| Input | Required fields or contents |
+| --- | --- |
+| Manifest | `schema_version: 1`, `root`, `feature_space`, `control_label`. |
+| Observation metadata | `cell_id`, `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. |
+| Embed inputs | Either `cell_index` or `labels`, plus `checkpoint`, `checkpoint_sha256`, model selection and image preprocessing settings. |
+| Phenotype input | `embeddings`: AnnData Zarr with raw vectors in `X` and observation metadata in `obs`. |
+| Optional classifiers | Trusted files with `path`, `sha256`, `feature_space`, `marker` and `task`. |
 
-Required observation fields: `cell_id` (unique cell/frame identity), `experiment`, `marker`, `perturbation`, `control_group`, `replicate`, `hours_post_perturbation`. The composite experiment/cell_id/marker key is unique. Optional infection_state is an independent annotation; predicted_infection_state is classifier output. Track/lineage fields are optional and never synthesized. If HPI is absent, `timing: {interval_minutes, first_frame_hpi}` computes it from zero-based `t`; both values come from the data owner and have no defaults. Do not combine experiments with different timing using one constant.
+Paths resolve against `root`, relative to the manifest location.
+The experiment, cell identifier and marker combination must be unique.
+Use `columns` for source-to-canonical field mappings.
+Use `metadata` for constants in absent fields.
 
-Inference additionally requires `cell_index`, `checkpoint`, `checkpoint_sha256`, and the canonical viscy-data cell-index schema (one row per cell/frame/channel). Coordinates t/y/x are zero-based native image indices. well is the plate-relative well (e.g. A/2), and fov is its leaf name (e.g. fov0), so store_path/well/fov addresses the image position. T_shape/C_shape/Z_shape/Y_shape/X_shape dimensions are required. Image store paths, FOV, channel names, physical pixel sizes, focus and normalization metadata must agree with the training data loader. Supply AI-ready OME-Zarr; conversion and segmentation are upstream. Preserve absent tracking fields as null.
+HPI means hours post infection in the paper data.
+The general field is `hours_post_perturbation`.
+When absent, `timing` computes it from `t * interval_minutes / 60 + first_frame_hpi`.
+Supply timing per observation when experiments use different time references.
 
-`cells-from-labels` builds this index from 2D nuclear labels (`labels/<label>` in each position) when no coordinate Parquet exists. The manifest's `labels` block sets `store`, `label` (default `nuclei`), `channels` (list of zarr `name` and `marker`) and `perturbation_wells` (perturbation to well list). One row per nucleus, frame and channel uses the label centroid as y/x, z = 0, the image dimensions and pixel sizes from the store, and HPI from `timing`. Label values are per-frame instances: they appear only in `cell_id` (`well/fov:label:t`) and `nucleus_label`; track and lineage fields stay null. Nuclei closer to the border than half the paper-recipe crop are written to `excluded_cells.parquet`. The stage fails when `interval_minutes` disagrees with the image time scale, when `control_label` has no wells, or when a channel lacks per-FOV normalization statistics.
+Cell-coordinate Parquet must follow the [viscy-data schema](../../../../packages/viscy-data/src/viscy_data/cell_index.py).
+Each row identifies one cell, frame and channel.
+Coordinates use zero-based native image indices.
+`store_path/well/fov` identifies the OME-Zarr position.
+Image dimensions, channels, pixel sizes, focus and normalization metadata must agree with the source images.
+Keep absent biological track identifiers null.
 
-`tracks-from-labels` writes `tracks/<row>/<col>/<fov>/tracks_<row>_<col>_<fov>.parquet` for every position from the same 2D labels (manifest `labels.store`, `labels.label`). Columns match the tracking CSV: `track_id`, `t`, `y`, `x` (label centroid), `id`, `parent_track_id`, `parent_id`. `track_id` is the per-frame nucleus label value, as in the classical-sampling CSVs; it restarts each frame and does not link nuclei over time. `id` is `100000` plus the row number from 1 in (t, label) order, unique within the FOV, and parents are -1. These pseudo-tracks carry no temporal identity.
+## Prepare external data
 
-`classifiers` is a list of trusted artifacts with path, sha256, feature_space, marker, task (e.g. infection_state), exposing predict/predict_proba and classes_ (or classifier.classes_). These may include preprocessing pipelines. Never load untrusted pickle/joblib. Predicted labels follow the saved model's decision rule; probability columns retain class labels. A classifier list can be omitted for already classified embeddings.
+The agent prepares missing inputs before running the skills.
+The runner converts supported nuclear labels into cell coordinates when configured through `labels`.
+Image conversion and segmentation remain preparation steps.
 
-`analysis` defaults: seed 42, min_cells 20, max_cells 180, permutations 200, repeats 50. Controls match experiment/control_group/exact HPI. The portable v1 preset samples observations and uses control-normalized PCA retaining 80% variance, with one fixed median bandwidth per marker. The explicit `normalize` step fits each marker/experiment/control group independently using only its own controls. It interpolates control medians over the HPI grid, smooths them with Gaussian sigma 1 (nearest boundary), subtracts those time-matched centers, and scales by `1.4826 * MAD` of the centered controls pooled across HPI, with a 1st-percentile positive-MAD floor. Controls at at least two HPI values per group are required; missing control groups or all-zero MAD fail normalization. This is the paper's time-matched recipe, not pooled-time global median/MAD. Centers, scales, control counts and cohort checksums are saved in `normalization.json` and `uns/organelle_normalization`. Set representation: raw to use encoder X, or sampling_unit: track_id / lineage_id to select one observation per temporal unit per exact HPI. Temporal sampling requires fov_name and the requested identity. The default cohort contains all treated cells. The paper reproduction command uses the archived onset-selected cohort and fitted representation; its numerical comparisons are recorded in [VALIDATION.md](VALIDATION.md). Insufficient matched cells at an HPI yield explicit status rows after normalization has passed. Curves are separate per experiment and treatment; replicate pooling is not performed.
+1. Inspect the supplied images, coordinates, embeddings and experimental metadata.
+2. Ask for missing channel identities, control assignments, pixel sizes and time references.
+3. Select the checkpoint and its matching image recipe.
+4. Convert only the inputs that do not satisfy the contract below.
+5. Check several extracted cell crops against their source images before full inference.
 
-## Stages and saved representations
+### Images and coordinates
 
-| Stage | Embedding output | Additional outputs |
-| --- | --- | --- |
-| `infer` | `predictions.zarr`: raw encoder `X`. `embeddings.parquet`: metadata plus raw `embeddings` vectors. | Classifier labels/probabilities in observation metadata. |
-| `normalize` | `normalized.zarr`: unchanged raw `X` plus normalized `obsm/X_control_mad`. `embeddings.parquet`: raw `embeddings` and normalized `ctrl-norm-embedding` vector columns. | `normalization.json`: fitted control parameters, recipe and source/output checksums. |
-| `plot` | `predictions.zarr` and `embeddings.parquet` preserve raw and normalized vectors. | Per-marker coordinate Parquet, PCA/UMAP PNG/PDF plots, PCA80 and UMAP joblib models. |
-| `analyze` | Same as `plot`; automatically fits and saves normalization when starting from raw data. | Plot outputs plus `mmd_curves.csv`, `mmd_samples.parquet` and MMD figures. |
+Convert source images into an iohub-compatible HCS OME-Zarr store.
+Use the source format's reader and the installed iohub writer.
+Preserve axis order `T,C,Z,Y,X`, channel names and physical pixel sizes.
+Record the source-to-output position mapping.
+Do not guess missing axes or pixel sizes.
 
-All stages write `predictions.parquet` (metadata/labels only), `resolved_manifest.yaml`, `provenance.json` and `artifacts.json`. Parquet embedding vectors are Arrow list columns; raw values preserve the source dtype and normalized vectors are float32. `observation_id` joins the vector table to the Zarr observation index. Coordinate tables carry the same index and canonical identity fields. Hashed figure stems avoid unsafe metadata filenames.
+Use existing cell coordinates when available.
+Otherwise, run an appropriate segmentation or detection method and extract cell centers.
+Record the method and parameters.
+Convert crop-relative coordinates into native image coordinates.
+Tracking is optional for observation sampling.
+Keep unavailable track identifiers null.
 
-Point the normalization manifest's `embeddings` at inference's `predictions.zarr`; point plotting/analysis manifests at `normalized.zarr`. Preserve metadata, `feature_space` and `control_label`. Remove classifiers to avoid recomputation; if supplied, they still run on raw X. Normalization always starts from raw X, including when rerun on normalized bundles. Plotting validates the saved source/normalized checksums and rejects stale or absent normalization. Changing the cohort requires an explicit normalization refit. The combined `analyze` command reuses valid saved normalization and fits it for raw inputs without a workflow normalization contract.
+Build a Parquet table with one row per cell, frame and selected channel.
+Include these fields alongside the experimental metadata above:
 
-PCA80 and seeded UMAP are fitted separately per marker using the saved normalized vectors. Conditions and timepoints share a fit within each marker; different markers' coordinates are separate spaces. This paper workflow uses 2D UMAP after PCA80, distinct from the movie export's joint PCA50/3D UMAP. The `ctrl-norm-embedding` and raw `embeddings` vector names match that export. MMD uses the pre-UMAP representation. Output directories must not already exist; failures are retained without a completion provenance file.
+| Fields | Meaning |
+| --- | --- |
+| `store_path`, `well`, `fov` | Absolute image-store path and position components. |
+| `t`, `y`, `x`, `z` | Native coordinates; `t` is an integer frame index. |
+| `channel_name`, `microscope`, `tracks_path` | Source descriptors; retain a null `tracks_path` when tracks are absent. |
+| `T_shape`, `C_shape`, `Z_shape`, `Y_shape`, `X_shape` | Dimensions read from the source image. |
+| `pixel_size_xy_um`, `pixel_size_z_um`, `z_focus_mean` | Calibration and focus values required by the selected recipe. |
 
-## Artifact inventory
+Use unique `cell_id` values for cell/frame observations.
+Keep biological `track_id` separate.
+Map CSV column names explicitly instead of deriving treatments from filenames.
+For registered tracking datasets, `dynaclr build-cell-index --help` describes the existing collection converter.
+For other tables, use pandas and preserve custom metadata with `DataFrame.to_parquet`.
+The fixed-schema cell-index writer omits additional fields such as `control_group` and `replicate`.
 
-Required for inference: VisCy repository/revision and uv.lock; resolved training config; encoder checkpoint with SHA-256; AI-ready image stores with normalization; cell-index Parquet; explicit experiment/control/timing metadata. Required for new classifier predictions: compatible immutable classifier pipelines, class mappings, checksums and their provenance. Required for cached analysis: embedding AnnData and the metadata above; raw images and GPU are not needed.
+### Data without tracking
 
-Paper encoder: `epoch=105-step=84800.ckpt` under `/hpc/projects/organelle_phenotyping/models/DynaCLR-2D-MIP-BagOfChannels/2d-mip-ntxent-t0p2-lr2e5-bs256-192to160-zext11-single-marker-fix-shuffler/DynaCLR-2D-MIP-BagOfChannels/jbrwhzr3/checkpoints/`. A .sha256 sidecar exists. The resolved config is `config.yaml` at the run root. Do not use mutable last.ckpt.
+For nuclear-label input, `embed` creates tracking-format Parquet tables and a canonical cell index before inference.
+For other detection formats, the agent prepares the canonical cell index.
+Each detected cell is an independent instance.
+This applies to single-timepoint images and independently segmented frames without temporal links.
+Use one row per cell/frame, shared across the selected image channels.
 
-Paper reproduction also requires per-marker embeddings, direct-pAL teacher `predictions_by_threshold.parquet`, lineage information, paper cohort manifests and run_info.json. The supplied paper_figure_pseudotime directory contains plotting provenance referencing parent mmd_curves.csv; plots alone are insufficient to rerun inference. The inventory records the current local locations and hashes of these assets. The real SEC61B infection classifier is classifier/DynaCLR/infection_state__pAL17_to_SEC61B/pipelines/infection_state_SEC61B.joblib relative to the prediction root. The inventory generator lists other classifier artifacts and checksums. These linear classifiers predict infection from marker embeddings. The direct-pAL teacher Parquet supplies the separate infection-onset cohort used by the paper MMD analysis; do not interchange these model roles.
+| Column | Value |
+| --- | --- |
+| `id` | Unique integer observation identifier within the FOV. |
+| `track_id` | The same independent instance identifier as `id`; never reused across frames. |
+| `t` | Native frame index; zero for a single-frame image. |
+| `y`, `x` | Cell centroid in native image pixels. |
+| `parent_track_id`, `parent_id` | `-1`, indicating no parent relationship. |
 
-## Validated example
+Example for two cells in one single-frame image:
 
-Generate an inventory with `uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/build_paper_inventory.py --prediction-root PATH --output inventory.json`. Run the small real-data example with `uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/smoke_paper.py --prediction-root PATH --output NEW_DIRECTORY`.
+```text
+track_id,t,y,x,id,parent_track_id,parent_id
+1,0,120.5,200.0,1,-1,-1
+2,0,310.0,145.5,2,-1,-1
+```
 
-Executed validation under `/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/portable-v1/`:
+The runner writes each FOV table to `tracks/<row>/<col>/<fov>/tracks_<row>_<col>_<fov>.parquet` within the output directory.
+Preserve the mapping from generated identifiers to source image, frame and segmentation label.
+Do not reuse segmentation label values as identifiers when labels restart in another frame.
+Preparation provenance records `track_identity: independent_instances` and the generated table location.
+These identifiers describe observations; they do not establish biological continuity.
 
-- `analysis-normalized`: 192 nonblank SEC61B observations, 32 controls and 32 treated cells at each of 12/18/24 HPI; real saved infection classifier, PCA/UMAP and MMD figures.
-- `external-analysis`: removed track metadata, renamed ID/treatment columns, derived HPI from frame metadata; MMD tables matched the normalized example exactly.
-- `raw-inference-v6`: eight real image crops with track IDs omitted; pinned epoch105 checkpoint; finite 768-dimensional embeddings, unique source identities and infection predictions.
-- `../paper_inventory.json`: 131 available local artifacts, including checksummed classifier and encoder files.
+Build the canonical cell index from these observations for `embed`.
+Preserve a unique `cell_id` containing the source position and instance identity.
+Keep biological track and lineage fields null in the canonical index and embedding outputs.
+Keep its `tracks_path` null.
+Use observation sampling for these data.
+Do not use the generated identifiers for temporal pairing, track sampling, lineage sampling or time alignment.
 
-Smoke MMD uses 20 permutations and five subsamples for speed. Publication comparisons use the full saved settings: 200 permutations and 50 paired subsamples. See [VALIDATION.md](VALIDATION.md) for the full-cohort numerical comparison and fresh inference checks.
+Set `hours_post_perturbation` from the experimental time reference.
+Frame zero does not imply zero hours post perturbation.
+Single-timepoint embedding does not require temporal tracking.
+The current phenotype normalization still requires controls at two or more timepoints per group.
 
-The default `inference_recipe: paper` uses FOV mean/std normalization, Phase3D focus, a 16-reference-slice window with offset 0.3, MIP for fluorescence, 0.1494 µm XY and 0.174 µm Z reference sampling, and 160 × 160 model crops. It reuses the paper Triplet transformations with a coordinate-only adapter; internal missing-track sentinels are never exported as biological tracks. Subpixel coordinates are rounded to the nearest native pixel. The explicit `inference_recipe: training` route requires `training_config` and retains its per-frame normalization. Both routes reject missing/invalid statistics. The paper route records filtered boundary observations in `excluded_cells.parquet` and fails if any requested observation was excluded. It checks every requested observation appears exactly once; incomplete threaded-loader results fail rather than silently producing a successful bundle.
+To use nuclear labels, replace `cell_index` with this block in the embedding configuration:
+
+```yaml
+labels:
+  store: images.zarr
+  label: nuclei
+  channels:
+    - name: GFP
+      marker: SEC61B
+  perturbation_wells:
+    uninfected: [A/1]
+    treated: [A/2]
+metadata:
+  experiment: experiment-1
+  control_group: acquisition-1
+  replicate: replicate-1
+  microscope: microscope-1
+timing:
+  first_frame_hpi: 24
+  # interval_minutes: 30  # Required only when images contain multiple frames.
+```
+
+Replace the example values with the acquisition metadata.
+Run the same `dynacell embed --config … --output …` command.
+Labels must occupy `labels/nuclei/0` with shape `(T, 1, 1, Y, X)` and integer values.
+Zero denotes background; positive values identify cells within each frame.
+Image and label dimensions must agree in T, Y and X.
+The training recipe supports label input for Z=1 images; supply coordinates for training-recipe Z-stacks.
+The paper recipe retains its existing focus requirements for Z-stacks.
+The runner filters boundary cells using the selected recipe's crop geometry.
+`cells.parquet` and `excluded_cells.parquet` preserve `instance_id` and `nucleus_label` for source mapping.
+`cells_summary.json` records counts and the absence of temporal identity.
+The FOV tracking-format tables include all detected instances, including those excluded from inference.
+
+### Image statistics and focus
+
+The runner currently requires image normalization metadata for every encoder, including CELL-DINO.
+Compute missing statistics on the prepared store:
+
+```python
+from viscy_utils.meta_utils import generate_normalization_metadata
+
+generate_normalization_metadata("/absolute/path/images.zarr", num_workers=1)
+```
+
+This writes normalization attributes into the image store.
+It computes both FOV and per-timepoint statistics.
+Use FOV statistics for the paper recipe and per-timepoint statistics for the training recipe.
+
+For recipes requiring focus estimation, use `qc run -c focus.yml` with the [focus configuration](../../../qc/configs/focus.yml).
+Install the `viscy-qc` workspace package when this command is needed.
+Set optical parameters from the acquisition metadata.
+The paper recipe requires Phase3D focus metadata.
+Read `focus_slice` metadata into the cell table when the selected recipe needs it.
+Check crop boundaries using the selected checkpoint's crop size and pixel-size conversion.
+Record excluded observations explicitly.
+
+### Existing embeddings and metadata
+
+For existing embeddings, prepare AnnData Zarr with raw vectors in `X` and aligned metadata in `obs`.
+Preserve the checkpoint and preprocessing identity in `feature_space`.
+Do not treat already normalized vectors as raw embeddings.
+Images and segmentation are unnecessary for this route.
+
+Use `columns` to rename source fields and `metadata` for known constants:
+
+```yaml
+columns:
+  object_id: cell_id
+  treatment: perturbation
+metadata:
+  experiment: experiment-1
+  control_group: acquisition-1
+  replicate: replicate-1
+timing:
+  interval_minutes: 30
+  first_frame_hpi: 3
+```
+
+Replace these example values with actual experimental facts.
+Preserve per-observation values when experiments differ.
+The current normalization requires controls at two or more timepoints; single-timepoint data needs a different normalization recipe.
+
+## Models
+
+| Selection | Configuration |
+| --- | --- |
+| Paper DynaCLR | `model_family: dynaclr`, `inference_recipe: paper`. |
+| Other DynaCell/DynaCLR representation checkpoint | `model_family: dynacell`, `inference_recipe: training`, matching `training_config`. |
+| Frozen CELL-DINO | `model_family: cell_dino`, [cell_dino_recipe.yaml](cell_dino_recipe.yaml), local `.pth` checkpoint. |
+
+The paper recipe uses FOV mean/std normalization and 160-pixel crops.
+It uses Phase3D focus, a 16-slice reference window, offset 0.3 and fluorescence maximum-intensity projection.
+Reference sampling is 0.1494 µm in XY and 0.174 µm in Z.
+The runner rounds coordinates to native pixels and rejects excluded observations.
+
+Training configurations must expose the VisCy embedding prediction interface.
+CELL-DINO loads the verified checkpoint through `weights_path`.
+Its wrapper resizes images and applies per-image, per-channel spatial z-score normalization.
+Set `predict.embedding_key: projections` only for a trained projection-head representation through the training recipe.
+Record checkpoint, preprocessing and representation selection in `feature_space`.
+
+`embed` rejects classifiers.
+Phenotype classifiers must expose `predict`, `predict_proba` and class labels.
+They use compatible raw embeddings.
+
+## Analysis
+
+Normalization fits controls independently for each marker, experiment and control group.
+It requires controls at two or more HPI values per group.
+It interpolates control medians across HPI and smooths them with Gaussian sigma 1 using nearest boundaries.
+It subtracts these centers and scales by `1.4826 * MAD` of control residuals across HPI.
+The scale floor is the first percentile of positive MAD values.
+Missing controls or all-zero MAD values fail normalization.
+
+PCA fits each marker separately and retains at least 80% of variance.
+Conditions and timepoints share that marker's fit.
+MMD compares all treated cells with controls from the same experiment, control group and exact HPI.
+It uses one median bandwidth per marker.
+UMAP provides visualization coordinates only.
+
+| Setting | Default |
+| --- | --- |
+| `seed` | 42 |
+| `min_cells` / `max_cells` | 20 / 180 |
+| `permutations` / `repeats` | 200 / 50 |
+| `representation` | `control_pca80`; `raw` selects unnormalized encoder vectors. |
+| `sampling_unit` | `observation`; `track_id` or `lineage_id` requires genuine identifiers and `fov_name`. |
+
+Insufficient matched cells produce explicit status rows.
+Subsampling intervals describe stability, not biological replicate confidence.
+Treatment, infection annotations and classifier predictions remain separate.
+
+## Outputs
+
+| Output | Contents |
+| --- | --- |
+| `predictions.zarr` | Raw `X`, metadata and optional classifier predictions. Phenotype also includes `obsm/X_control_mad`. |
+| `embeddings.parquet` | Raw `embeddings`; phenotype also includes normalized `ctrl-norm-embedding`. |
+| `predictions.parquet` | Metadata, labels and probabilities. |
+| `normalization.json` | Fitted control parameters and source/output checksums. |
+| Coordinate Parquet, PNG/PDF, fitted models | Per-marker PCA/UMAP results. |
+| `mmd_curves.csv`, `mmd_samples.parquet` | Population comparisons and selected observation identities. |
+| `resolved_manifest.yaml`, `provenance.json`, `artifacts.json` | Input paths, settings and output inventory. |
+
+`observation_id` links embedding vectors to observation metadata.
+Hashed filenames prevent marker labels from creating unsafe paths.
+Use new output directories.
+Failures omit the completion provenance file.
+
+The `normalize` command separately writes `normalized.zarr`.
+The `plot` command skips MMD.
+The older `infer` and `analyze` commands remain available.
+Refit normalization after changing the input population, controls or raw vectors.
+
+## Paper resources
+
+The [inventory helper](tools/build_paper_inventory.py) lists local checkpoints, configurations, classifiers and cached embeddings.
+The [paper example](tools/smoke_paper.py) selects a small SEC61B population with a saved infection classifier.
+Both accept `--prediction-root` and `--output`.
+Use the paper's `epoch105-step84800` prediction directory as `--prediction-root`.
+Image and coordinate paths also appear in run manifests.
+The current resource inventory uses HPC paths without public download URLs.
+The recorded inventory is:
+
+```text
+/hpc/projects/intracellular_dashboard/organelle_dynamics/tmp-test-skill/paper_inventory.json
+```

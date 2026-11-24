@@ -1,5 +1,9 @@
 import json
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,32 +11,37 @@ import yaml
 from iohub import open_ome_zarr
 from iohub.ngff.models import TransformationMeta
 
-from dynaclr.evaluation.organelle_cells import paper_crop_half_px
-from dynaclr.evaluation.organelle_workflow import run
+from dynaclr.evaluation.organelle_cells import _inside_crop, cells_from_labels
+from dynaclr.evaluation.organelle_workflow import load_manifest, main, run, sha256
 
-# Native pixel size giving a 20-pixel paper crop (half = 10).
 PIXEL = 0.1494 * 160 / 20
 STATS = dict(mean=1.0, std=2.0, median=1.0, iqr=1.0, min=0.0, max=9.0)
 
 
-def _label_store(path, interval_s=1800.0):
+def _label_store(path, frames=2):
     with open_ome_zarr(path, layout="hcs", mode="w", channel_names=["Phase3D", "GFP"]) as plate:
         for row, col in [("A", "1"), ("A", "2")]:
             pos = plate.create_position(row, col, "0")
-            scale = TransformationMeta(type="scale", scale=[interval_s, 1.0, 1.0, PIXEL, PIXEL])
-            pos.create_image("0", np.ones((2, 2, 1, 64, 64), np.float32), transform=[scale])
-            labels = np.zeros((2, 1, 1, 64, 64), np.uint32)
-            labels[:, 0, 0, 30:35, 30:35] = 7  # centred: kept
-            labels[0, 0, 0, 2:5, 2:5] = 8  # crop crosses the border at t=0 only
+            scale = TransformationMeta(type="scale", scale=[1800.0, 1.0, 1.0, PIXEL, PIXEL])
+            pos.create_image("0", np.ones((frames, 2, 1, 64, 64), np.float32), transform=[scale])
+            labels = np.zeros((frames, 1, 1, 64, 64), np.uint32)
+            labels[:, 0, 0, 30:35, 30:35] = 7
+            labels[0, 0, 0, 2:5, 2:5] = 8
             pos.zgroup.create_group("labels").create_group("nuclei").create_array("0", data=labels, chunks=labels.shape)
-            pos.zattrs["normalization"] = {"GFP": {"fov_statistics": STATS}}
+            pos.zattrs["normalization"] = {
+                "GFP": {"fov_statistics": STATS, "timepoint_statistics": {str(t): STATS for t in range(frames)}}
+            }
 
 
 def _manifest(tmp_path, **overrides):
+    checkpoint = tmp_path / "encoder.ckpt"
+    checkpoint.write_text("encoder replaced by a deterministic test double")
     m = dict(
         schema_version=1,
         root=".",
         feature_space="encoder",
+        checkpoint="encoder.ckpt",
+        checkpoint_sha256=sha256(checkpoint),
         control_label="mock",
         labels=dict(
             store="plate.zarr",
@@ -43,72 +52,161 @@ def _manifest(tmp_path, **overrides):
         timing=dict(first_frame_hpi=6, interval_minutes=30),
     )
     m.update(overrides)
-    path = tmp_path / "cells.yaml"
+    path = tmp_path / "my experiment.yaml"
     path.write_text(yaml.safe_dump(m))
     return path
 
 
-def test_crop_half_matches_paper_recipe():
-    assert paper_crop_half_px(PIXEL) == 10
-    assert paper_crop_half_px(0.10708735394584887) == 111
+def _fake_embeddings(cells, destination):
+    keys = cells[["experiment", "cell_id", "marker"]].copy()
+    with pd.option_context("future.infer_string", False):
+        keys = keys.astype(object)
+        data = ad.AnnData(np.arange(len(cells) * 4, dtype="float32").reshape(len(cells), 4), obs=keys)
+        data.write_zarr(destination)
+    return destination
 
 
-def test_cells_from_labels_untracked_index(tmp_path):
-    _label_store(tmp_path / "plate.zarr")
-    run(_manifest(tmp_path), tmp_path / "out", "cells-from-labels")
-    cells = pd.read_parquet(tmp_path / "out/cells.parquet")
-    excluded = pd.read_parquet(tmp_path / "out/excluded_cells.parquet")
-    assert len(cells) == 4  # one centred nucleus x 2 wells x 2 frames
-    np.testing.assert_allclose(cells[["y", "x"]].to_numpy(), 32.0)
-    assert sorted(cells.hours_post_perturbation.unique()) == [6.0, 6.5]
-    assert set(cells.perturbation) == {"mock", "virus"}
-    assert cells.cell_id.is_unique and cells.cell_id.str.contains(":7:").all()
-    assert set(cells.channel_name) == {"GFP"} and set(cells.marker) == {"M"}
-    # Nucleus labels are per-frame instances, never track identities.
-    assert "track_id" not in cells and cells.tracks_path.isna().all()
-    assert (cells[["T_shape", "C_shape", "Z_shape", "Y_shape", "X_shape"]].to_numpy() == [2, 2, 1, 64, 64]).all()
-    assert len(excluded) == 2 and set(excluded.exclusion_reason) == {"crop_crosses_image_border"}
-    summary = json.loads((tmp_path / "out/cells_summary.json").read_text())
-    assert summary["cells"] == 4
+@pytest.mark.parametrize("frames", [1, 2])
+@pytest.mark.parametrize("recipe", ["paper", "cell_dino"])
+def test_embed_labels_preserves_independent_instances(tmp_path, monkeypatch, frames, recipe):
+    _label_store(tmp_path / "plate.zarr", frames)
+    output = tmp_path / "output"
+    overrides = dict(timing={"first_frame_hpi": 6}) if frames == 1 else {}
+    if recipe == "paper":
+
+        def predict(cells, checkpoint, destination, batch_size):
+            return _fake_embeddings(cells, destination / "raw.zarr")
+
+        monkeypatch.setattr("dynaclr.evaluation.organelle_inference.predict_paper_cells", predict)
+    else:
+        config = {
+            "model": {
+                "class_path": "dynaclr.engine.ContrastiveModule",
+                "init_args": {
+                    "encoder": {
+                        "class_path": "viscy_models.foundation.cell_dino.CellDinoModel",
+                        "init_args": {"weights_path": "unused.pth"},
+                    }
+                },
+            },
+            "data": {
+                "class_path": "dynaclr.data.datamodule.MultiExperimentDataModule",
+                "init_args": {"yx_patch_size": [20, 20], "z_window": 1},
+            },
+        }
+        (tmp_path / "recipe.yml").write_text(yaml.safe_dump(config))
+        overrides.update(model_family="cell_dino", training_config="recipe.yml")
+
+        def predict(command, check):
+            if command[1] != "predict":
+                pytest.fail(f"Unexpected subprocess: {command}")
+            resolved = yaml.safe_load(Path(command[-1]).read_text())
+            assert resolved["trainer"]["default_root_dir"] == str(output)
+            from dynaclr.data.datamodule import MultiExperimentDataModule
+
+            loader = MultiExperimentDataModule(**resolved["data"]["init_args"])
+            loader.setup("predict")
+            cells = pd.read_parquet(resolved["data"]["init_args"]["cell_index_path"])
+            assert len(loader.predict_dataset) == len(cells)
+            destination = output / "embeddings/embeddings.zarr"
+            destination.parent.mkdir()
+            _fake_embeddings(cells, destination)
+
+        monkeypatch.setattr(
+            "dynaclr.evaluation.organelle_workflow.subprocess",
+            SimpleNamespace(run=predict, check_output=subprocess.check_output),
+        )
+    config = _manifest(tmp_path, **overrides)
+    monkeypatch.setattr("sys.argv", ["dynacell", "embed", "--config", str(config), "--output", str(output)])
+    main()
+    cells = pd.read_parquet(output / "cells.parquet")
+    saved = ad.read_zarr(output / "predictions.zarr")
+    assert len(cells) == len(saved) == 2 * frames
+    assert cells.cell_id.is_unique
+    assert set(cells.nucleus_label) == {7}
+    assert cells[["track_id", "lineage_id", "global_track_id", "tracks_path"]].isna().all().all()
+    assert saved.obs[["track_id", "lineage_id", "global_track_id", "tracks_path"]].isna().all().all()
+    assert saved.obs.cell_id.tolist() == cells.cell_id.tolist()
+    np.testing.assert_allclose(cells.interval_minutes, 0 if frames == 1 else 30)
+    np.testing.assert_allclose(cells[["y", "x"]], 32.0)
+    np.testing.assert_allclose(sorted(cells.hours_post_perturbation.unique()), [6.0] if frames == 1 else [6.0, 6.5])
+    for fov in ["A/1/0", "A/2/0"]:
+        table = pd.read_parquet(output / "tracks" / fov / f"tracks_{fov.replace('/', '_')}.parquet")
+        assert table.track_id.is_unique and table.id.equals(table.track_id)
+        assert table.id.tolist() == list(range(1, frames + 2))
+        assert table.t.tolist() == ([0, 0] if frames == 1 else [0, 0, 1])
+        assert table[["parent_id", "parent_track_id"]].eq(-1).all().all()
+    assert len(pd.read_parquet(output / "excluded_cells.parquet")) == 2
+    provenance = json.loads((output / "provenance.json").read_text())
+    assert provenance["stage"] == "embed"
+    assert provenance["manifest"]["input_preparation"]["track_identity"] == "independent_instances"
+    # A resolved label-input configuration must remain valid for another run.
+    assert "cell_index" not in load_manifest(output / "resolved_manifest.yaml")
+    assert "X_control_mad" not in saved.obsm
 
 
 @pytest.mark.parametrize(
-    "overrides, message",
+    "timing, message",
     [
-        (dict(timing=None), "start HPI"),
-        (dict(timing=dict(interval_minutes=30)), "start HPI"),
-        (dict(timing=dict(first_frame_hpi=6, interval_minutes=60)), "disagrees with the image time scale"),
-        (dict(control_label="uninfected"), "control_label"),
-        (dict(metadata=dict(experiment="E", control_group="g", replicate="r")), "microscope"),
+        ({}, "first_frame_hpi"),
+        ({"first_frame_hpi": float("nan"), "interval_minutes": 30}, "first_frame_hpi"),
+        ({"first_frame_hpi": 6}, "interval_minutes"),
+        ({"first_frame_hpi": 6, "interval_minutes": -30}, "positive"),
+        ({"first_frame_hpi": 6, "interval_minutes": 60}, "image time scale"),
     ],
 )
-def test_cells_from_labels_rejects_unsupplied_metadata(tmp_path, overrides, message):
+def test_labels_reject_invalid_timing(tmp_path, timing, message):
     _label_store(tmp_path / "plate.zarr")
     with pytest.raises(ValueError, match=message):
-        run(_manifest(tmp_path, **overrides), tmp_path / "out", "cells-from-labels")
+        run(_manifest(tmp_path, timing=timing), tmp_path / "out", "embed")
+    assert not (tmp_path / "out/provenance.json").exists()
 
 
-def test_missing_channel_normalization_names_channel(tmp_path):
+def test_missing_channel_statistics_names_source(tmp_path):
     _label_store(tmp_path / "plate.zarr")
     with open_ome_zarr(tmp_path / "plate.zarr/A/1/0", mode="r+") as pos:
         pos.zattrs["normalization"] = {"4-GFP-raw": {"fov_statistics": STATS}}
     with pytest.raises(ValueError, match="'GFP'.*4-GFP-raw"):
-        run(_manifest(tmp_path), tmp_path / "out", "cells-from-labels")
+        run(_manifest(tmp_path), tmp_path / "out", "embed")
 
 
-def test_tracks_from_labels_per_fov_parquet(tmp_path):
+def test_paper_border_filter_uses_rounded_centers():
+    cells = pd.DataFrame({"y": [10.49, 10.51, 53.49, 53.51], "x": [32.0] * 4})
+    np.testing.assert_array_equal(_inside_crop(cells, (1, 1, 1, 64, 64), PIXEL, None), [False, True, True, False])
+
+
+def test_all_excluded_still_writes_exclusion_table(tmp_path):
     _label_store(tmp_path / "plate.zarr")
-    manifest = tmp_path / "tracks.yaml"
-    manifest.write_text(yaml.safe_dump(dict(schema_version=1, root=".", labels=dict(store="plate.zarr"))))
-    run(manifest, tmp_path / "out", "tracks-from-labels")
-    for fov in ["A/1/0", "A/2/0"]:
-        tracks = pd.read_parquet(tmp_path / "out/tracks" / fov / f"tracks_{fov.replace('/', '_')}.parquet")
-        assert list(tracks.columns) == ["track_id", "t", "y", "x", "id", "parent_track_id", "parent_id"]
-        # t=0: labels 7 and 8; t=1: label 7. track_id is the label value; id is unique.
-        assert tracks.t.tolist() == [0, 0, 1]
-        assert tracks.track_id.tolist() == [7, 8, 7]
-        assert tracks.id.tolist() == [100001, 100002, 100003]
-        assert (tracks[["parent_track_id", "parent_id"]] == -1).all().all()
-        np.testing.assert_allclose(tracks[["y", "x"]].to_numpy(), [[32, 32], [3, 3], [32, 32]])
-    summary = json.loads((tmp_path / "out/tracks_summary.json").read_text())
-    assert summary["fovs"] == 2 and summary["observations"] == 6
+    output = tmp_path / "out"
+    output.mkdir()
+    m = load_manifest(_manifest(tmp_path))
+    with pytest.raises(ValueError, match="Every nucleus"):
+        cells_from_labels(m, output, data_init={"yx_patch_size": [128, 128]})
+    assert len(pd.read_parquet(output / "excluded_cells.parquet")) == 6
+
+
+def test_ambiguous_input_rejected_before_output(tmp_path):
+    path = _manifest(tmp_path, cell_index="also-cells.parquet")
+    with pytest.raises(ValueError, match="exactly one"):
+        run(path, tmp_path / "out", "embed")
+    assert not (tmp_path / "out").exists()
+
+
+def test_inference_does_not_require_control_cells(tmp_path):
+    _label_store(tmp_path / "plate.zarr", frames=1)
+    m = load_manifest(_manifest(tmp_path, timing={"first_frame_hpi": 24}))
+    m["labels"]["perturbation_wells"] = {"virus": ["A/2"]}
+    output = tmp_path / "out"
+    output.mkdir()
+    cells = cells_from_labels(m, output)
+    assert cells.perturbation.tolist() == ["virus"]
+
+
+def test_malformed_labels_fail_explicitly(tmp_path):
+    _label_store(tmp_path / "plate.zarr")
+    with open_ome_zarr(tmp_path / "plate.zarr/A/1/0", mode="r+") as pos:
+        labels = pos.zgroup["labels"]["nuclei"]
+        del labels["0"]
+        labels.create_array("0", data=np.zeros((2, 2, 1, 64, 64), dtype="uint32"))
+    with pytest.raises(ValueError, match="shape"):
+        run(_manifest(tmp_path), tmp_path / "out", "embed")
