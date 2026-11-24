@@ -33,12 +33,12 @@ Set `normalization.mode` from the requested comparison:
 
 | Mode | Control reference |
 | --- | --- |
-| `per_timepoint` | Separate median and MAD at every timepoint; controls must exist at each timepoint. |
+| `per_timepoint` | Default. Separate median and MAD at every timepoint; controls must exist at each timepoint. |
 | `pooled` | One median and MAD from all control observations across timepoints within each group. |
-| `time_matched` | Default paper recipe: smoothed temporal centers and pooled residual MAD; requires controls at two or more timepoints. |
 
 Use `per_timepoint` or `pooled` for single-timepoint data.
-Keep the default when reproducing the existing paper results.
+Do not smooth control medians or interpolate missing timepoints.
+Recompute older smoothed outputs from raw embeddings.
 Start from raw embeddings when changing modes.
 Preserve raw embeddings alongside normalized embeddings.
 Compare all treated cells with matched controls, independently of classifier predictions.

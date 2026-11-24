@@ -10,7 +10,7 @@ They do not reproduce complete Figure 6 panels.
 | --- | --- |
 | [verify_inference.py](verify_inference.py) | Compare fresh DynaCLR embeddings with archived values. All 96 observations pass the float32 tolerance. |
 | [verify_classifiers.py](verify_classifiers.py) | Compare saved classifiers on fresh and archived embeddings. All 96 labels match. |
-| [verify_normalization.py](verify_normalization.py) | Recompute control normalization and saved PCA transforms. All 257,856 observations match exactly under the original numerical settings. |
+| [verify_normalization.py](verify_normalization.py) | Recompute control normalization and saved PCA transforms. The archived run matched 257,856 observations using the former smoothed recipe. |
 | [verify_paper.py](verify_paper.py) | Recompute archived ZIKV HPI MMD. All 3,339 comparisons pass across 371 bins. |
 | [verify_steps.py](verify_steps.py) | Check exports and separate plotting on 192 observations. Previous MMD tables match exactly. |
 | [results.json](results.json) | Combined original numerical reports, tolerances, input hashes and integration-check paths. |
@@ -18,6 +18,10 @@ They do not reproduce complete Figure 6 panels.
 The integration checks also cover CELL-DINO inference on two cells and `phenotype` on 192 paper observations.
 They check finite vectors, preserved identities and export agreement.
 They do not establish CELL-DINO biological accuracy.
+
+The current default uses independent per-timepoint normalization without smoothing.
+Historical normalization and downstream PCA/MMD equality results do not validate this changed default.
+`verify_normalization.py` reports differences against the archived smoothed recipe and exits nonzero when they differ.
 
 ## Repeat a check
 
@@ -33,7 +37,7 @@ uv run --no-sync python applications/dynaclr/examples/organelle_dynamics/verific
 `PAPER_REFERENCE` is the archived `direct_pal_lineage_native30_same_cohort_alignment` directory.
 It contains the curve table, matched-sample manifest, PCA scores and run parameters.
 Inference and normalization checks require the local datasets listed in the original paper analysis script.
-The steps check uses a completed population-analysis directory as its reference.
+The steps check requires a reference generated with the same normalization mode as the current run.
 
 ## Comparison boundaries
 

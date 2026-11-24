@@ -229,25 +229,24 @@ Select the temporal grouping in the phenotype configuration:
 
 ```yaml
 normalization:
-  mode: per_timepoint  # Alternatives: pooled, time_matched.
+  mode: per_timepoint  # Default; alternative: pooled.
 ```
 
 | Mode | Center and scale | Required controls |
 | --- | --- | --- |
-| `per_timepoint` | Control median and `1.4826 * MAD` fitted separately at each exact HPI. No smoothing or interpolation. | Controls at every observed HPI. |
+| `per_timepoint` | Default. Control median and `1.4826 * MAD` fitted separately at each exact HPI. No smoothing or interpolation. | Controls at every observed HPI. |
 | `pooled` | One control median and `1.4826 * MAD` across all control observations in the group. | Controls somewhere within the group. |
-| `time_matched` | Default paper recipe: smoothed temporal centers and pooled residual MAD. | Controls at two or more HPI values. |
 
 Pooled normalization weights each control observation equally; timepoints with more controls contribute more observations.
-The paper recipe interpolates control medians across HPI and smooths them with Gaussian sigma 1 using nearest boundaries.
-It scales centered embeddings by `1.4826 * MAD` of control residuals pooled across HPI.
 The scale floor is the first percentile of positive MAD values.
 Each fitted scale uses its own floor; missing required controls or all-zero MAD values fail normalization.
-Both new modes support a single timepoint when controls have nonzero variation.
+Both modes support a single timepoint when controls have nonzero variation.
 Raw embeddings remain unchanged.
 `normalization.json` records the mode, reference timepoints, fitted centers, scales and control counts.
 Each pooled fit stores one center and scale; each per-timepoint fit stores its own center and scale.
 Saved normalization from another mode is rejected.
+The removed `time_matched` recipe used smoothing and pooled residual scaling.
+Recompute its saved outputs from raw embeddings; the current default produces different results.
 Start from the raw embedding output or explicitly rerun `normalize` when changing modes.
 
 PCA fits each marker separately and retains at least 80% of variance.

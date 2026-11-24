@@ -62,6 +62,7 @@ def test_cli_config_aliases_run_same_workflow(normalization_data, tmp_path, monk
     saved = ad.read_zarr(output / "normalized.zarr")
     np.testing.assert_array_equal(saved.X, normalization_data.X)
     assert "X_control_mad" in saved.obsm
+    assert saved.uns["organelle_normalization"]["mode"] == "per_timepoint"
 
 
 def test_control_normalization_translation_invariance():
@@ -80,7 +81,7 @@ def test_control_normalization_translation_invariance():
     result = control_normalize(x, obs, "mock")
     np.testing.assert_allclose(result, control_normalize(x + 10, obs, "mock"), atol=1e-5)
     np.testing.assert_array_equal(x, x.copy())
-    with pytest.raises(ValueError, match="two HPI"):
+    with pytest.raises(ValueError, match="Missing controls"):
         control_normalize(x, obs.assign(perturbation="virus"), "mock")
 
 
@@ -156,7 +157,7 @@ def normalization_data():
         return ad.AnnData(np.concatenate(arrays), obs=pd.concat(frames, ignore_index=True))
 
 
-@pytest.mark.parametrize("mode", ["time_matched", "per_timepoint", "pooled"])
+@pytest.mark.parametrize("mode", ["per_timepoint", "pooled"])
 def test_normalization_uses_own_controls_and_preserves_raw(normalization_data, mode):
     from dynaclr.evaluation.organelle_normalization import normalize_embeddings, require_normalized
 
@@ -201,7 +202,7 @@ def test_stale_normalization_rejected(normalization_data, change):
         require_normalized(data, m)
 
 
-@pytest.mark.parametrize("mode", ["time_matched", "per_timepoint", "pooled"])
+@pytest.mark.parametrize("mode", ["per_timepoint", "pooled"])
 def test_normalize_cli_roundtrip(normalization_data, tmp_path, mode):
     import json
 
@@ -456,7 +457,7 @@ def test_per_timepoint_requires_controls_at_every_time(changing_controls):
     np.testing.assert_allclose(pooled, (x - 2) / (2 * 1.4826), rtol=1e-6)
 
 
-@pytest.mark.parametrize("settings", [{"mode": "unknown"}, {"mod": "pooled"}, "pooled", None])
+@pytest.mark.parametrize("settings", [{"mode": "unknown"}, {"mode": "time_matched"}, {"mod": "pooled"}, "pooled", None])
 def test_invalid_normalization_option_rejected(normalization_data, settings):
     from dynaclr.evaluation.organelle_normalization import normalize_embeddings
 
@@ -467,11 +468,28 @@ def test_invalid_normalization_option_rejected(normalization_data, settings):
     assert "X_control_mad" not in normalization_data.obsm
 
 
-def test_old_paper_contract_without_mode_remains_valid(normalization_data):
+@pytest.mark.parametrize("with_mode", [False, True])
+def test_old_smoothed_contract_rejected(normalization_data, with_mode):
     from dynaclr.evaluation.organelle_normalization import CONTRACT_KEY, normalize_embeddings, require_normalized
 
     m = dict(control_label="mock", feature_space="encoder")
     normalize_embeddings(normalization_data, m)
-    del normalization_data.uns[CONTRACT_KEY]["mode"]
-    result = require_normalized(normalization_data, m)
-    np.testing.assert_array_equal(result, normalization_data.obsm["X_control_mad"])
+    contract = normalization_data.uns[CONTRACT_KEY]
+    contract["recipe"] = "time_matched_control_median_mad_v1"
+    if with_mode:
+        contract["mode"] = "time_matched"
+    else:
+        del contract["mode"]
+    with pytest.raises(ValueError, match="stale"):
+        require_normalized(normalization_data, m)
+
+
+def test_default_normalization_is_per_timepoint(changing_controls):
+    from dynaclr.evaluation.organelle_normalization import control_normalize, normalization_mode
+
+    x, obs = changing_controls
+    assert normalization_mode({}) == "per_timepoint"
+    assert normalization_mode({"normalization": {}}) == "per_timepoint"
+    actual = control_normalize(x, obs, "mock")
+    expected = np.array([-1, 0, 1, 3, -1, 0, 1, 3])[:, None] / 1.4826
+    np.testing.assert_allclose(actual, expected, rtol=1e-6)
