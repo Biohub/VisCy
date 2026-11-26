@@ -1,0 +1,183 @@
+"""Integration tests for ``assemble_channel_store.py`` on tiny synthetic HCS stores."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+from assemble_channel_store import assemble, main  # noqa: E402
+from iohub.ngff import TransformationMeta, open_ome_zarr
+
+_POSITIONS = ("A/1/0", "A/1/1", "B/2/0")
+_SCALE = [1.0, 1.0, 0.29, 0.108, 0.108]
+
+
+def _store(
+    path: Path,
+    channels: list[str],
+    *,
+    shape=(2, 4, 16, 16),
+    seed=0,
+    positions=_POSITIONS,
+    norm=True,
+    chunks=None,
+    shards_ratio=None,
+    shapes=None,
+    dtype=np.float32,
+):
+    """Write a plate with one random (T, C, Z, Y, X) image per position; return its arrays.
+
+    ``shapes`` maps a position name to its own (T, Z, Y, X), overriding ``shape`` there.
+    """
+    rng = np.random.default_rng(seed)
+    data = {}
+    with open_ome_zarr(path, layout="hcs", mode="w-", channel_names=channels, version="0.5") as plate:
+        if norm:
+            plate.zattrs["normalization"] = {c: {"dataset_statistics": {"mean": 1.0}} for c in channels}
+        for name in positions:
+            pos_shape = (shapes or {}).get(name, shape)
+            arr = rng.random((pos_shape[0], len(channels), *pos_shape[1:]), dtype=np.float32).astype(dtype)
+            pos = plate.create_position(*name.split("/"))
+            pos.create_image(
+                "0",
+                arr,
+                chunks=chunks or (1, 1, *pos_shape[1:]),
+                shards_ratio=shards_ratio,
+                transform=[TransformationMeta(type="scale", scale=_SCALE)],
+            )
+            if norm:
+                pos.zattrs["normalization"] = {
+                    c: {"fov_statistics": {"mean": float(i), "std": 1.0}} for i, c in enumerate(channels)
+                }
+            data[name] = arr
+    return data
+
+
+def test_assemble_keeps_base_channels_and_adds_renamed_ones(tmp_path: Path) -> None:
+    """Kept channels and stats come from the base, added channels from their stores, renamed."""
+    base = _store(tmp_path / "base.zarr", ["Brightfield", "Nuclei", "Phase3D"], seed=0)
+    recon = _store(tmp_path / "wo1.zarr", ["Phase3D"], seed=1, norm=False)
+    out = tmp_path / "out.zarr"
+
+    main(
+        [
+            "--base", str(tmp_path / "base.zarr"),
+            "--keep", "Phase3D", "Nuclei",
+            "--add", f"{tmp_path / 'wo1.zarr'}:Phase3D:PhaseWO1",
+            "--output", str(out),
+        ]
+    )  # fmt: skip
+
+    with open_ome_zarr(out, mode="r") as plate:
+        assert plate.channel_names == ["Phase3D", "Nuclei", "PhaseWO1"]
+        assert set(plate.zattrs["normalization"]) == {"Phase3D", "Nuclei"}
+        names = [name for name, _ in plate.positions()]
+        assert names == list(_POSITIONS)
+        for name, pos in plate.positions():
+            got = np.asarray(pos["0"])
+            np.testing.assert_array_equal(got[:, 0], base[name][:, 2])
+            np.testing.assert_array_equal(got[:, 1], base[name][:, 1])
+            np.testing.assert_array_equal(got[:, 2], recon[name][:, 0])
+            assert pos.scale == _SCALE
+            assert pos["0"].chunks == (1, 1, 4, 16, 16)
+            norm = pos.zattrs["normalization"]
+            assert norm == {
+                "Phase3D": {"fov_statistics": {"mean": 2.0, "std": 1.0}},
+                "Nuclei": {"fov_statistics": {"mean": 1.0, "std": 1.0}},
+            }
+
+
+@pytest.mark.parametrize(
+    "shards_ratio, shards", [(None, None), ((2, 1, 2, 2, 2), (2, 1, 4, 16, 16))], ids=["unsharded", "sharded"]
+)
+def test_assemble_preserves_the_base_sharding(tmp_path: Path, shards_ratio, shards) -> None:
+    """A sharded base gives a sharded output with the same shard shape; an unsharded base stays unsharded."""
+    base = _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"], chunks=(1, 1, 2, 8, 8), shards_ratio=shards_ratio)
+    assemble(tmp_path / "base.zarr", ["Nuclei"], [], tmp_path / "o.zarr")
+    with open_ome_zarr(tmp_path / "o.zarr", mode="r") as plate:
+        for name, pos in plate.positions():
+            assert pos["0"].chunks == (1, 1, 2, 8, 8)
+            assert pos["0"].shards == shards
+            np.testing.assert_array_equal(np.asarray(pos["0"])[:, 0], base[name][:, 1])
+
+
+def test_assemble_refuses_a_shape_mismatch(tmp_path: Path) -> None:
+    """A 2D (single-Z) reconstruction cannot sit next to a full-Z base channel."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "wo2d.zarr", ["Phase2D"], shape=(2, 1, 16, 16))
+    adds = [(tmp_path / "wo2d.zarr", "Phase2D", "PhaseWO1")]
+    with pytest.raises(ValueError, match="reconstruction_dimension: 3"):
+        assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
+
+
+def test_assemble_validates_every_position_before_writing(tmp_path: Path) -> None:
+    """A shape mismatch in the last position raises without leaving a partial output store."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "wo1.zarr", ["Phase3D"], shapes={_POSITIONS[-1]: (2, 1, 16, 16)})
+    adds = [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")]
+    with pytest.raises(ValueError, match=f"{_POSITIONS[-1]}.*reconstruction_dimension: 3"):
+        assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
+    assert not (tmp_path / "o.zarr").exists()
+
+
+def test_assemble_refuses_a_dtype_mismatch(tmp_path: Path) -> None:
+    """An added channel is never cast to the base dtype; the output store is not created."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"], dtype=np.uint16)
+    _store(tmp_path / "wo1.zarr", ["Phase3D"])
+    adds = [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")]
+    with pytest.raises(ValueError, match=r"wo1\.zarr.*Phase3D.*float32.*uint16"):
+        assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
+    assert not (tmp_path / "o.zarr").exists()
+
+
+def test_assemble_refuses_a_missing_position(tmp_path: Path) -> None:
+    """Every base position must exist in each added store, or nothing is written."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "partial.zarr", ["Phase3D"], positions=_POSITIONS[:2])
+    adds = [(tmp_path / "partial.zarr", "Phase3D", "PhaseWO1")]
+    with pytest.raises(KeyError):
+        assemble(
+            tmp_path / "base.zarr",
+            ["Nuclei"],
+            adds,
+            tmp_path / "o.zarr",
+        )
+    assert not (tmp_path / "o.zarr").exists()
+
+
+def test_assemble_refuses_a_missing_channel_before_writing(tmp_path: Path) -> None:
+    """A source channel absent from its store raises without creating the output store."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "wo1.zarr", ["Phase3D"])
+    with pytest.raises(ValueError, match="Phase2D"):
+        assemble(
+            tmp_path / "base.zarr", ["Nuclei"], [(tmp_path / "wo1.zarr", "Phase2D", "PhaseWO1")], tmp_path / "o.zarr"
+        )
+    assert not (tmp_path / "o.zarr").exists()
+
+
+@pytest.mark.parametrize("spec", ["x.zarr:Ch", "x.zarr::New", ":Ch:New"])
+def test_main_reports_a_malformed_add_as_a_usage_error(tmp_path: Path, capsys, spec: str) -> None:
+    """``--add`` without STORE:SRC_CHANNEL:NEW_CHANNEL exits through argparse, naming the format."""
+    argv = ["--base", str(tmp_path / "base.zarr"), "--add", spec, "--output", str(tmp_path / "o.zarr")]
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == 2
+    assert "STORE:SRC_CHANNEL:NEW_CHANNEL" in capsys.readouterr().err
+
+
+def test_assemble_refuses_duplicate_names_and_existing_output(tmp_path: Path) -> None:
+    """Renaming onto a kept channel and writing over an existing store both raise."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "wo1.zarr", ["Phase3D"])
+    adds = [(tmp_path / "wo1.zarr", "Phase3D", "Phase3D")]
+    with pytest.raises(ValueError, match="unique"):
+        assemble(tmp_path / "base.zarr", ["Phase3D"], adds, tmp_path / "o.zarr")
+    assemble(tmp_path / "base.zarr", [], [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")], tmp_path / "o.zarr", limit=1)
+    with open_ome_zarr(tmp_path / "o.zarr", mode="r") as plate:
+        # Nothing kept: no normalization attrs at all, so viscy preprocess starts clean.
+        assert "normalization" not in plate.zattrs
+        assert all("normalization" not in pos.zattrs for _, pos in plate.positions())
+    with pytest.raises(FileExistsError):
+        assemble(tmp_path / "base.zarr", ["Nuclei"], [], tmp_path / "o.zarr")

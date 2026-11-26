@@ -1,0 +1,37 @@
+# Second draw (seed 1) of nucleus/fnet2d_vscyto2daug/ipsc_confocal/train.yml.
+# Recipe delta vs that leaf: seed_everything: 1. Gives the seed-to-seed spread
+# a phase-reconstruction variant has to exceed. Everything else, and the
+# rationale for it, is the baseline leaf's, which this leaf uses as its base;
+# the callbacks list is restated only because lists replace whole and the
+# checkpoint dirpath changes.
+base:
+  - ../../fnet2d_vscyto2daug/ipsc_confocal/train.yml
+
+seed_everything: 1
+
+benchmark:
+  model_name: fnet2d_vscyto2daug_seed1
+  experiment_id: nucleus__ipsc_confocal__fnet2d_vscyto2daug_seed1
+
+trainer:
+  logger:
+    init_args:
+      name: FNet2D_VSAug_iPSC_NUCL_seed1
+      save_dir: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_seed1
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: loss/validate
+        filename: "epoch={epoch}-step={step}-loss={loss/validate:.3f}"
+        auto_insert_metric_name: false
+        every_n_epochs: 1
+        save_top_k: 4
+        save_last: true
+        dirpath: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_seed1/checkpoints
+
+launcher:
+  job_name: FNet2DVSAug_iPSC_NUCL_seed1
+  run_root: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_seed1

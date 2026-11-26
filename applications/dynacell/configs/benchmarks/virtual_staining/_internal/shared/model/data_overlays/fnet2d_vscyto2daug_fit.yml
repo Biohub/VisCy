@@ -1,0 +1,93 @@
+# FNet2D "same-augmentations" ablation fit-time HCS data hparams (Arm B of
+# the 2D patch-vs-augmentation split), the 2D counterpart of
+# fnet3d_vscyto3daug_fit.yml.
+#
+# Grafts the VSCyto2D (FCMAE-2D) augmentation pipeline, verbatim from
+# fcmae_vscyto2d_fit.yml (the 600x600 weighted crop plus BatchedRandAffined /
+# BatchedCenterSpatialCropd to 384 / AdjustContrast / ScaleIntensity /
+# GaussianNoise / GaussianSmooth), onto an otherwise-unchanged FNet2D fit.
+# Model, optimizer, loss and schedule come from model_overlays/fnet2d_fit.yml,
+# the mean/std normalization from data_overlays/fnet2d_fit.yml, and max_steps
+# (20k), bf16-mixed precision and the speed flags from
+# model_overlays/fnet2d_bigpatch_fit.yml (which extends fnet2d_fit.yml).
+#
+# Paired with fnet2d_bigpatch_fit.yml (same store, batch, num_samples,
+# model input 384x384, flip-only augs) so Arm A and Arm B differ ONLY in the
+# augmentation stack: a clean augmentation-effect comparison.
+#
+# Verbatim includes the VSCyto2D overlay's rotate_range [0, 0, 0] (index 0 is
+# the in-plane rotation about Z) and its lack of flips, so this arm has no
+# orientation augmentation; the 3D overlay rotates in plane by up to pi.
+#
+# Structure-keyed like fnet2d_fit.yml: single-set nucleus leaves list-replace
+# normalizations + the CPU crops to re-key onto Nuclei.
+data:
+  init_args:
+    z_window_size: 1
+    batch_size: 48
+    num_workers: 8
+    yx_patch_size: [384, 384]
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Structure]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+    augmentations:
+      # CPU: 4 large weighted crops per FOV (VSCyto2D policy); the GPU affine
+      # + center crop take them to the 384x384 model input.
+      - class_path: viscy_transforms.RandWeightedCropd
+        init_args:
+          keys: [Phase3D, Structure]
+          w_key: Structure
+          spatial_size: [1, 600, 600]
+          num_samples: 4
+    gpu_augmentations:
+      - class_path: viscy_transforms.BatchedRandAffined
+        init_args:
+          keys: [source, target]
+          prob: 0.8
+          rotate_range: [0, 0, 0]
+          shear_range: [0.0, 0.05, 0.05]
+          scale_range: [[1, 1], [0.5, 1.5], [0.5, 1.5]]
+      - class_path: viscy_transforms.BatchedCenterSpatialCropd
+        init_args:
+          keys: [source, target]
+          roi_size: [1, 384, 384]
+      - class_path: viscy_transforms.BatchedRandAdjustContrastd
+        init_args:
+          keys: [source]
+          prob: 0.5
+          gamma: [0.8, 1.2]
+      - class_path: viscy_transforms.BatchedRandScaleIntensityd
+        init_args:
+          keys: [source]
+          prob: 0.5
+          factors: 0.5
+      - class_path: viscy_transforms.BatchedRandGaussianNoised
+        init_args:
+          keys: [source]
+          prob: 0.5
+          mean: 0.0
+          std: 0.3
+      - class_path: viscy_transforms.BatchedRandGaussianSmoothd
+        init_args:
+          keys: [source]
+          prob: 0.5
+          sigma_x: [0.25, 0.75]
+          sigma_y: [0.25, 0.75]
+          sigma_z: [0, 0]
+    val_augmentations:
+      # CPU center crop on the raw channel keys (the fnet2d val mechanism),
+      # sized to the model input. Validation applies no augmentation.
+      - class_path: viscy_transforms.CenterSpatialCropd
+        init_args:
+          keys: [Phase3D, Structure]
+          roi_size: [1, 384, 384]

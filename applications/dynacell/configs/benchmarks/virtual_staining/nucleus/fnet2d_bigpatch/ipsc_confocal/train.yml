@@ -1,0 +1,92 @@
+# FNet2D "larger-patch, simple-augs" ablation (Arm A) on nucleus (Nuclei
+# channel of the iPSC in-focus slab store cell_focus.zarr). Relative to
+# nucleus/fnet2d/ipsc_confocal the patch grows 64x64 -> 384x384 with
+# num_samples 8 -> 4 (data_overlays/fnet2d_bigpatch_fit.yml), but precision
+# (32-true -> bf16-mixed), the speed flags and max_steps (200k -> 20k) also
+# change (model_overlays/fnet2d_bigpatch_fit.yml), so it is not a clean
+# patch-size comparison. Augmentations stay FNet-simple
+# (YX flips), so the only delta from fnet2d_vscyto2daug (Arm B) is the augs.
+# 2D counterpart of nucleus/fnet3d_bigpatch/ipsc_confocal.
+# The data overlay keys norm/aug/val on Structure; the nucleus target_channel
+# is Nuclei, so this leaf list-replaces those three lists to re-key them,
+# keeping the overlay's crop sizes. Store and channels are declared inline
+# with the manifest resolver off, as in nucleus/fnet2d/ipsc_confocal.
+#
+# Speed flags, bf16-mixed and the 20k-step budget (and why) are in
+# model_overlays/fnet2d_bigpatch_fit.yml, shared by both 2D arms.
+base:
+  - ../../../_internal/shared/model/train_sets/ipsc_confocal.yml
+  - ../../../_internal/shared/model/targets/nucleus.yml
+  - ../../../_internal/shared/model/data_overlays/fnet2d_bigpatch_fit.yml
+  - ../../../_internal/shared/model/model_overlays/fnet2d_bigpatch_fit.yml
+  - ../../../_internal/shared/model/launcher_profiles/mode_fit.yml
+  - ../../../_internal/shared/model/launcher_profiles/hardware_gpu_any_long.yml
+  - ../../../_internal/shared/model/launcher_profiles/runtime_shared.yml
+
+benchmark:
+  task: virtual_staining
+  organelle: nucleus
+  train_set: ipsc_confocal
+  model_name: fnet2d_bigpatch
+  experiment_id: nucleus__ipsc_confocal__fnet2d_bigpatch
+  # The 2D track reads the offline focus store, not the manifest-registered
+  # cell.zarr, so the resolver is off and the data fields are inline.
+  dataset_ref: null
+
+data:
+  init_args:
+    source_channel: Phase3D
+    target_channel: Nuclei
+    data_path: /hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/cell_focus.zarr
+    normalizations:
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Phase3D]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+      - class_path: viscy_transforms.NormalizeSampled
+        init_args:
+          keys: [Nuclei]
+          level: fov_statistics
+          subtrahend: mean
+          divisor: std
+    augmentations:
+      - class_path: viscy_transforms.RandWeightedCropd
+        init_args:
+          keys: [Phase3D, Nuclei]
+          w_key: Nuclei
+          spatial_size: [1, 384, 384]
+          num_samples: 4
+    val_augmentations:
+      - class_path: viscy_transforms.CenterSpatialCropd
+        init_args:
+          keys: [Phase3D, Nuclei]
+          roi_size: [1, 384, 384]
+
+trainer:
+  logger:
+    init_args:
+      name: FNet2D_BigPatch_iPSC_NUCL
+      save_dir: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_bigpatch
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: loss/validate
+        filename: "epoch={epoch}-step={step}-loss={loss/validate:.3f}"
+        auto_insert_metric_name: false
+        every_n_epochs: 1
+        save_top_k: 4
+        save_last: true
+        dirpath: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_bigpatch/checkpoints
+
+launcher:
+  job_name: FNet2DBigPatch_iPSC_NUCL
+  run_root: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_bigpatch
+  # Same memory as the fnet2d leaf: the 5-plane focus store needs far less
+  # mmap_preload headroom than the full-Z cell.zarr.
+  sbatch:
+    mem: "128G"
