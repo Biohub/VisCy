@@ -121,7 +121,7 @@ uv run viscy preprocess --data_path $L/ipsc/dataset_v4/test_cropped/cell_wo1.zar
 
 Make one config per reconstruction. Put it at `applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet2d_vscyto2daug_wo1/ipsc_confocal/train.yml`.
 
-The `fnet2d_vscyto2daug_` name prefix matters. The test suite gives the speed flags to every model whose name starts with it, and a config placed here is checked by the repository tests.
+The repository tests expect the speed flags on every FNet 2D train config with a 384 × 384 patch (one input plane), whatever its name. A config placed here inherits the flags from its base and keeps that patch, so it is checked by those tests.
 
 ```yaml
 # Per-reconstruction variant of nucleus/fnet2d_vscyto2daug/ipsc_confocal: same recipe,

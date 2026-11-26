@@ -1389,19 +1389,20 @@ _SPEED_FLAGS: dict[str, dict[str, bool]] = {
 
 
 # 2-D FNet leaves that opt into the flags, measured on an A40: 1.05x from the flags alone,
-# 2.47x with bf16-mixed (see the leaves' header comments). Matched by prefix so the seed
-# draw and per-reconstruction variants (fnet2d_vscyto2daug_<name>) inherit them.
-_FLAGGED_2D_FNET_MODELS = ("fnet2d_bigpatch", "fnet2d_vscyto2daug")
-
-
+# 2.47x with bf16-mixed (see model_overlays/fnet2d_bigpatch_fit.yml). Selected by the composed
+# config (FNet3D architecture, one input plane, 384x384 patch), not the leaf name, so the seed
+# draw and per-reconstruction variants inherit them. The joint fnet2d leaves author no top-level
+# yx_patch_size, so they stay unflagged.
 def _expected_speed_flags(cfg: dict) -> dict[str, bool]:
     """Return the flags a composed fit config must set: its 3-D family's, else none."""
     init_args = cfg["model"]["init_args"]
-    if cfg["benchmark"]["model_name"].startswith(_FLAGGED_2D_FNET_MODELS):
-        return _SPEED_FLAGS["FNet3D"]
-    if init_args.get("architecture") not in _SPEED_FLAGS or init_args["model_config"]["in_stack_depth"] == 1:
+    architecture = init_args.get("architecture")
+    if architecture not in _SPEED_FLAGS:
         return {}
-    return _SPEED_FLAGS[init_args["architecture"]]
+    if init_args["model_config"]["in_stack_depth"] == 1:
+        patch = cfg["data"]["init_args"].get("yx_patch_size")
+        return _SPEED_FLAGS["FNet3D"] if architecture == "FNet3D" and patch == [384, 384] else {}
+    return _SPEED_FLAGS[architecture]
 
 
 @pytest.mark.parametrize("leaf", _all_train_leaves(), ids=lambda p: str(p.relative_to(BENCHMARKS)))
