@@ -37,15 +37,15 @@ def _parse_add(spec: str) -> tuple[Path, str, str]:
 def assemble(
     base: Path, keep: list[str], adds: list[tuple[Path, str, str]], output: Path, limit: int | None = None
 ) -> None:
-    """Write ``output``.
+    """Write ``output``, after checking every input position so a failure leaves no partial store.
 
     Raises
     ------
     ValueError
-        If an output channel name repeats, or an added store's position has a different
-        (T, Z, Y, X) than the base position.
+        If an output channel name repeats, a kept or added channel is missing from its store,
+        or an added store's position has a different (T, Z, Y, X) than the base position.
     KeyError
-        If an added store lacks a base position or the named channel.
+        If an added store lacks a base position.
     """
     out_channels = [*keep, *(new for _, _, new in adds)]
     if len(set(out_channels)) != len(out_channels):
@@ -53,26 +53,33 @@ def assemble(
     with ExitStack() as stack:
         src = stack.enter_context(open_ome_zarr(base, mode="r"))
         others = [stack.enter_context(open_ome_zarr(store, mode="r")) for store, _, _ in adds]
+        keep_idx = [src.channel_names.index(c) for c in keep]
+        add_idx = [other.channel_names.index(ch) for other, (_, ch, _) in zip(others, adds)]
+        positions = list(islice(src.positions(), limit))
+        # Metadata-only pass over every position, so an input problem surfaces before the
+        # output store exists (a "w-" store written halfway looks usable to a trainer).
+        for name, pos in positions:
+            shape = pos["0"].shape
+            expected = (shape[0], *shape[2:])
+            for other, (store, _, _) in zip(others, adds):
+                added_shape = other[name]["0"].shape
+                added = (added_shape[0], *added_shape[2:])
+                if added != expected:
+                    raise ValueError(
+                        f"{store}/{name}: (T, Z, Y, X) {added} != base {expected}; "
+                        "reconstruct with the input's full Z (waveorder reconstruction_dimension: 3)"
+                    )
         dst = stack.enter_context(
             open_ome_zarr(output, layout="hcs", mode="w-", channel_names=out_channels, version="0.5")
         )
         plate_norm = {c: v for c, v in src.zattrs.get("normalization", {}).items() if c in keep}
         if plate_norm:
             dst.zattrs["normalization"] = plate_norm
-        keep_idx = [src.channel_names.index(c) for c in keep]
-        add_idx = [other.channel_names.index(ch) for other, (_, ch, _) in zip(others, adds)]
-        for name, pos in islice(src.positions(), limit):
+        for name, pos in positions:
             arr = pos["0"]
             planes = [np.asarray(arr[:, i]) for i in keep_idx]
-            for other, i, (store, _, _) in zip(others, add_idx, adds):
-                added = np.asarray(other[name]["0"][:, i])
-                expected = (arr.shape[0], *arr.shape[2:])
-                if added.shape != expected:
-                    raise ValueError(
-                        f"{store}/{name}: (T, Z, Y, X) {added.shape} != base {expected}; "
-                        "reconstruct with the input's full Z (waveorder reconstruction_dimension: 3)"
-                    )
-                planes.append(added.astype(arr.dtype, copy=False))
+            for other, i in zip(others, add_idx):
+                planes.append(np.asarray(other[name]["0"][:, i]).astype(arr.dtype, copy=False))
             row, col, fov = name.split("/")
             out = dst.create_position(row, col, fov)
             chunks = (1, 1, *arr.chunks[2:])

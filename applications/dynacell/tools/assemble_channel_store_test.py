@@ -23,20 +23,25 @@ def _store(
     norm=True,
     chunks=None,
     shards_ratio=None,
+    shapes=None,
 ):
-    """Write a plate with one random (T, C, Z, Y, X) image per position; return its arrays."""
+    """Write a plate with one random (T, C, Z, Y, X) image per position; return its arrays.
+
+    ``shapes`` maps a position name to its own (T, Z, Y, X), overriding ``shape`` there.
+    """
     rng = np.random.default_rng(seed)
     data = {}
     with open_ome_zarr(path, layout="hcs", mode="w-", channel_names=channels, version="0.5") as plate:
         if norm:
             plate.zattrs["normalization"] = {c: {"dataset_statistics": {"mean": 1.0}} for c in channels}
         for name in positions:
-            arr = rng.random((shape[0], len(channels), *shape[1:]), dtype=np.float32)
+            pos_shape = (shapes or {}).get(name, shape)
+            arr = rng.random((pos_shape[0], len(channels), *pos_shape[1:]), dtype=np.float32)
             pos = plate.create_position(*name.split("/"))
             pos.create_image(
                 "0",
                 arr,
-                chunks=chunks or (1, 1, *shape[1:]),
+                chunks=chunks or (1, 1, *pos_shape[1:]),
                 shards_ratio=shards_ratio,
                 transform=[TransformationMeta(type="scale", scale=_SCALE)],
             )
@@ -105,8 +110,18 @@ def test_assemble_refuses_a_shape_mismatch(tmp_path: Path) -> None:
         assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
 
 
+def test_assemble_validates_every_position_before_writing(tmp_path: Path) -> None:
+    """A shape mismatch in the last position raises without leaving a partial output store."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "wo1.zarr", ["Phase3D"], shapes={_POSITIONS[-1]: (2, 1, 16, 16)})
+    adds = [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")]
+    with pytest.raises(ValueError, match=f"{_POSITIONS[-1]}.*reconstruction_dimension: 3"):
+        assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
+    assert not (tmp_path / "o.zarr").exists()
+
+
 def test_assemble_refuses_a_missing_position(tmp_path: Path) -> None:
-    """Every base position must exist in each added store."""
+    """Every base position must exist in each added store, or nothing is written."""
     _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
     _store(tmp_path / "partial.zarr", ["Phase3D"], positions=_POSITIONS[:2])
     adds = [(tmp_path / "partial.zarr", "Phase3D", "PhaseWO1")]
@@ -117,6 +132,18 @@ def test_assemble_refuses_a_missing_position(tmp_path: Path) -> None:
             adds,
             tmp_path / "o.zarr",
         )
+    assert not (tmp_path / "o.zarr").exists()
+
+
+def test_assemble_refuses_a_missing_channel_before_writing(tmp_path: Path) -> None:
+    """A source channel absent from its store raises without creating the output store."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
+    _store(tmp_path / "wo1.zarr", ["Phase3D"])
+    with pytest.raises(ValueError, match="Phase2D"):
+        assemble(
+            tmp_path / "base.zarr", ["Nuclei"], [(tmp_path / "wo1.zarr", "Phase2D", "PhaseWO1")], tmp_path / "o.zarr"
+        )
+    assert not (tmp_path / "o.zarr").exists()
 
 
 def test_assemble_refuses_duplicate_names_and_existing_output(tmp_path: Path) -> None:
