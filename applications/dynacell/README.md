@@ -252,4 +252,4 @@ If you use DynaCell (code, data, or trained checkpoints), please cite
 - Subdirectories: [configs/](configs/README.md) · [src/](src/README.md) · [tools/](tools/README.md) ·
   [tests/](tests/README.md) · [examples/](examples/README.md)
 - Guides: [2D virtual staining tutorial](docs/2d-virtual-staining-tutorial.md) (new source channel → train → predict and score on DynaCell-lite)
-- Guides: [3D virtual staining tutorial](docs/3d-virtual-staining-tutorial.md) (3D fit on one or four GPUs → profile → predict and score on DynaCell-lite)
+- Guides: [3D virtual staining tutorial](docs/3d-virtual-staining-tutorial.md) (public AWS data → 3D fit on one or four GPUs → profile → predict and score on the iPSC test set)

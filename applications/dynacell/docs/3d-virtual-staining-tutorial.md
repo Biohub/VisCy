@@ -13,9 +13,10 @@ virtual-staining models. It covers one loop:
 **How the commands were checked (2026-11-23 and 2026-11-25):**
 - every preview command (`--print-resolved-config`, `--print-script`, `--dry-run`, Hydra
   `--cfg job`) was run and exited 0;
-- the data path of §3.1–3.2 was run against the public release: the manifest rewrite, config
-  resolution to the downloaded archive, and the profiling recipe of §5 for 30 steps on one A40
-  reading the training archive directly, with the A40 changes listed in §5;
+- the data path of §3.1–3.2 was run against the lab's byte-for-byte mirror of the public bucket:
+  the manifest rewrite, config resolution to the archives, and the profiling recipe of §5 for 30
+  steps on one A40 reading the training archive directly, with the A40 changes listed in §5. The
+  public HTTPS URLs of the two `cell.ozx` archives answer with the same byte sizes as the mirror;
 - commands marked **(not run)** were not executed;
 - commands ran as the checkout's virtualenv binaries (`.venv/bin/python`, `.venv/bin/dynacell`); the
   `uv run` forms shown are the equivalents.
@@ -214,8 +215,8 @@ export DYNACELL_MANIFEST_ROOTS=<data-dir>/manifests     # the line the script pr
 - **The rewrite drops `cell_segmentation`**, the lab's cleaned cell masks of the test set. They
   are not in the release. The evaluation requires them only with `compute_feature_metrics=true`
   or `compute_cell_similarity=true`, and the fast tier of §8 sets neither.
-- **`gt_cache_dir`** is where the evaluation caches ground-truth masks. It starts empty; the
-  first evaluation fills it (§8).
+- **`gt_cache_dir`** is where the evaluation caches ground-truth masks. It starts empty, and the
+  first evaluation is expected to fill it (§8; not run).
 - **Check it:** `--print-resolved-config` (§4.2) should show
   `data_path: <data-dir>/aics-hipsc/train/cell.ozx`.
 
@@ -693,9 +694,10 @@ uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evalua
   (read from `cellpose/models.py`; not tried from outside the lab). Compute nodes without internet
   access need that file copied in beforehand.
 - **Caches:**
-  - ground-truth masks are cached in the manifest's `gt_cache_dir`. Your copy starts empty, so the
-    first evaluation segments the ground truth and fills it (`io.require_complete_cache: false`);
-    later evaluations reuse it;
+  - ground-truth masks are cached in the manifest's `gt_cache_dir`. Your copy starts empty. With
+    `io.require_complete_cache: false` (the default) a cache miss is computed and written there,
+    so the first evaluation should segment the ground truth and fill it, and later evaluations
+    reuse it. A run from an empty cache has not been tried;
   - prediction caches go to your `io.pred_cache_dir`;
   - the `force_recompute.pred_*` flags stop a re-predicted store from being scored with stale masks.
 - **Outputs** in `save.save_dir`:
