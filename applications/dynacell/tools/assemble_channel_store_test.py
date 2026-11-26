@@ -24,6 +24,7 @@ def _store(
     chunks=None,
     shards_ratio=None,
     shapes=None,
+    dtype=np.float32,
 ):
     """Write a plate with one random (T, C, Z, Y, X) image per position; return its arrays.
 
@@ -36,7 +37,7 @@ def _store(
             plate.zattrs["normalization"] = {c: {"dataset_statistics": {"mean": 1.0}} for c in channels}
         for name in positions:
             pos_shape = (shapes or {}).get(name, shape)
-            arr = rng.random((pos_shape[0], len(channels), *pos_shape[1:]), dtype=np.float32)
+            arr = rng.random((pos_shape[0], len(channels), *pos_shape[1:]), dtype=np.float32).astype(dtype)
             pos = plate.create_position(*name.split("/"))
             pos.create_image(
                 "0",
@@ -116,6 +117,16 @@ def test_assemble_validates_every_position_before_writing(tmp_path: Path) -> Non
     _store(tmp_path / "wo1.zarr", ["Phase3D"], shapes={_POSITIONS[-1]: (2, 1, 16, 16)})
     adds = [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")]
     with pytest.raises(ValueError, match=f"{_POSITIONS[-1]}.*reconstruction_dimension: 3"):
+        assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
+    assert not (tmp_path / "o.zarr").exists()
+
+
+def test_assemble_refuses_a_dtype_mismatch(tmp_path: Path) -> None:
+    """An added channel is never cast to the base dtype; the output store is not created."""
+    _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"], dtype=np.uint16)
+    _store(tmp_path / "wo1.zarr", ["Phase3D"])
+    adds = [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")]
+    with pytest.raises(ValueError, match=r"wo1\.zarr.*Phase3D.*float32.*uint16"):
         assemble(tmp_path / "base.zarr", ["Nuclei"], adds, tmp_path / "o.zarr")
     assert not (tmp_path / "o.zarr").exists()
 

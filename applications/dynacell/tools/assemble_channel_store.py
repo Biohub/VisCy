@@ -3,7 +3,7 @@ r"""Assemble a new HCS OME-Zarr store from kept channels of a base store plus ch
 Built for adding phase reconstructions (e.g. waveorder outputs) as new source channels to
 DynaCell train and test data without touching the registered stores. The output keeps the
 base store's plate layout, position names, chunks and OME scale; every added channel must
-come from a store with the same position names and the same (T, Z, Y, X) per position.
+come from a store with the same position names and the same (T, Z, Y, X) and dtype per position.
 
 Normalization statistics of the kept channels are copied from the base store. Added channels
 get none: run ``viscy preprocess --channel_names '["<NEW>"]'`` on the output afterwards.
@@ -43,7 +43,7 @@ def assemble(
     ------
     ValueError
         If an output channel name repeats, a kept or added channel is missing from its store,
-        or an added store's position has a different (T, Z, Y, X) than the base position.
+        or an added store's position has a different (T, Z, Y, X) or dtype than the base position.
     KeyError
         If an added store lacks a base position.
     """
@@ -61,13 +61,18 @@ def assemble(
         for name, pos in positions:
             shape = pos["0"].shape
             expected = (shape[0], *shape[2:])
-            for other, (store, _, _) in zip(others, adds):
-                added_shape = other[name]["0"].shape
-                added = (added_shape[0], *added_shape[2:])
+            for other, (store, ch, _) in zip(others, adds):
+                added_arr = other[name]["0"]
+                added = (added_arr.shape[0], *added_arr.shape[2:])
                 if added != expected:
                     raise ValueError(
                         f"{store}/{name}: (T, Z, Y, X) {added} != base {expected}; "
                         "reconstruct with the input's full Z (waveorder reconstruction_dimension: 3)"
+                    )
+                if added_arr.dtype != pos["0"].dtype:
+                    raise ValueError(
+                        f"{store}/{name}: channel {ch!r} has dtype {added_arr.dtype}, base has {pos['0'].dtype}; "
+                        "convert it to the base dtype first"
                     )
         dst = stack.enter_context(
             open_ome_zarr(output, layout="hcs", mode="w-", channel_names=out_channels, version="0.5")
@@ -79,7 +84,7 @@ def assemble(
             arr = pos["0"]
             planes = [np.asarray(arr[:, i]) for i in keep_idx]
             for other, i in zip(others, add_idx):
-                planes.append(np.asarray(other[name]["0"][:, i]).astype(arr.dtype, copy=False))
+                planes.append(np.asarray(other[name]["0"][:, i]))
             row, col, fov = name.split("/")
             out = dst.create_position(row, col, fov)
             chunks = (1, 1, *arr.chunks[2:])
