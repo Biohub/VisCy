@@ -15,7 +15,7 @@ The running example is nucleus, trained on iPSC. The variant tag is `wo1`: one w
 
 | Piece | Path |
 |---|---|
-| Branch | `dynacell-fnet2d-vscyto2daug` (VisCy) |
+| Branch | `main` (VisCy) |
 | Baseline train config | `applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet2d_vscyto2daug/ipsc_confocal/train.yml` |
 | Second seed of the baseline | `.../nucleus/fnet2d_vscyto2daug_seed1/ipsc_confocal/train.yml` |
 | Baseline lite predict configs | `.../nucleus/fnet2d_vscyto2daug{,_seed1}/ipsc_confocal/predict__{ipsc_confocal,a549_mantis_h2b_{mock,denv,zikv}}_lite.yml` |
@@ -44,7 +44,6 @@ The running example is nucleus, trained on iPSC. The variant tag is `wo1`: one w
 
 ```sh
 git clone git@github.com:Biohub/VisCy.git && cd VisCy
-git checkout dynacell-fnet2d-vscyto2daug
 uv sync --all-packages --all-extras --frozen   # needs the HPC uv cache symlink, see CLAUDE.md
 uv run wandb login                             # training logs to wandb project "dynacell"
 ```
@@ -274,7 +273,7 @@ uv run dynacell predict -c ~/dynacell-resolved/wo1-pred-ipsc.yml
 - **Re-predicting into the same store** needs `--overwrite`.
 - **Timing:** 36 s for iPSC lite (50 FOVs) and 54–68 s per A549 lite condition. Route (a) is **(not run)**.
 
-**Baseline predicts.** The two baseline models already have lite predict configs. Run them once their fits finish, which is expected by about 2026-11-19:
+**Baseline predicts.** The two baseline fits ran to 200k steps, and their lite predict configs pin each fit's best-validation checkpoint (§0). Run them with:
 
 ```sh
 for m in fnet2d_vscyto2daug fnet2d_vscyto2daug_seed1; do
@@ -334,7 +333,7 @@ The command was run with `uv run --no-sync` in an already-synced environment. Th
 - **Lite is validated for model rankings,** not for small differences. It has half the iPSC FOVs and half the A549 timepoints, so the standard error is about 1.4× the full benchmark's. To confirm a small effect, re-score on the full 2D benchmark: full dataset names, `.../dynacell/focus2d_planes/...` plane files.
 - **A549 is out of domain for an iPSC-trained model.**
   - The old `fnet2d` (64 × 64 patches, flips only) fails there completely, with PCC < 0.1 and Dice < 0.01.
-  - The VSCyto2D augmentations are expected to help, based on the 3D result. The baseline's A549 numbers will show it.
+  - Based on the 3D result, the VSCyto2D augmentations may help here; compare against the baseline's A549 numbers.
 - **Useful columns:**
   - `PCC` and `SI_SSIM` for intensity agreement;
   - `FRC_Resolution` (µm, lower is better) for resolved detail;

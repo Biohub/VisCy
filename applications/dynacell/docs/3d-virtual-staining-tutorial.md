@@ -30,7 +30,7 @@ any directory you can write to, both given as absolute paths.
 
 | Piece | Path (repository-relative) |
 |---|---|
-| Branch | `dynacell-fnet2d-vscyto2daug` (VisCy) |
+| Branch | `main` (VisCy) |
 | Primary single-GPU fit | `applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet3d_vscyto3daug/ipsc_confocal/train.yml` |
 | Primary 4-GPU DDP fit | `.../nucleus/fcmae_vscyto3d_scratch/ipsc_confocal/train.yml` |
 | Shared config fragments | `.../virtual_staining/_internal/shared/model/{train_sets,targets,data_overlays,model_overlays,launcher_profiles,predict_sets}/` |
@@ -111,7 +111,6 @@ All values are from the resolved nucleus/iPSC leaves (`--print-resolved-config` 
 
 ```sh
 git clone https://github.com/Biohub/VisCy.git && cd VisCy
-git checkout dynacell-fnet2d-vscyto2daug
 uv sync --all-packages --all-extras --frozen
 uv run wandb login                 # or: export WANDB_MODE=offline
 ```
