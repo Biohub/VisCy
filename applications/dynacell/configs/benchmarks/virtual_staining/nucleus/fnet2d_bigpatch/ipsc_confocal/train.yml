@@ -1,8 +1,10 @@
 # FNet2D "larger-patch, simple-augs" ablation (Arm A) on nucleus (Nuclei
-# channel of the iPSC in-focus slab store cell_focus.zarr). Isolates the
-# patch-size effect: identical to nucleus/fnet2d/ipsc_confocal except the
-# patch grows 64x64 -> 384x384 with num_samples 8 -> 4
-# (data_overlays/fnet2d_bigpatch_fit.yml). Augmentations stay FNet-simple
+# channel of the iPSC in-focus slab store cell_focus.zarr). Relative to
+# nucleus/fnet2d/ipsc_confocal the patch grows 64x64 -> 384x384 with
+# num_samples 8 -> 4 (data_overlays/fnet2d_bigpatch_fit.yml), but precision
+# (32-true -> bf16-mixed), the speed flags and max_steps (200k -> 20k) also
+# change (model_overlays/fnet2d_bigpatch_fit.yml), so it is not a clean
+# patch-size comparison. Augmentations stay FNet-simple
 # (YX flips), so the only delta from fnet2d_vscyto2daug (Arm B) is the augs.
 # 2D counterpart of nucleus/fnet3d_bigpatch/ipsc_confocal.
 # The data overlay keys norm/aug/val on Structure; the nucleus target_channel

@@ -7,7 +7,10 @@
 # augmentation stack. This overlay applies ONLY the larger patch with FNet's
 # own simple augmentations (YX flips), so:
 #   fnet2d (64x64, flips)  ->  fnet2d_bigpatch (384x384, flips)
-#       isolates the patch-size effect, and
+#       is NOT a clean patch-size comparison: num_samples also drops 8 -> 4
+#       here, and model_overlays/fnet2d_bigpatch_fit.yml changes precision
+#       (32-true -> bf16-mixed), adds the speed flags and cuts max_steps
+#       (200k -> 20k), and
 #   fnet2d_bigpatch (384x384, flips)  ->  fnet2d_vscyto2daug (384x384, augs)
 #       isolates the augmentation effect.
 # Store, normalization (mean/std), batch, crop sampler, model, optimizer and
