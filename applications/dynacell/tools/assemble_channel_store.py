@@ -28,9 +28,10 @@ from iohub.ngff.models import TransformationMeta
 
 def _parse_add(spec: str) -> tuple[Path, str, str]:
     """Split ``STORE:SRC_CHANNEL:NEW_CHANNEL`` (the store path may itself hold colons)."""
-    store, src_ch, new_ch = spec.rsplit(":", 2)
-    if not (store and src_ch and new_ch):
-        raise ValueError(f"--add expects STORE:SRC_CHANNEL:NEW_CHANNEL, got {spec!r}")
+    parts = spec.rsplit(":", 2)
+    if len(parts) != 3 or not all(parts):
+        raise argparse.ArgumentTypeError(f"expected STORE:SRC_CHANNEL:NEW_CHANNEL, got {spec!r}")
+    store, src_ch, new_ch = parts
     return Path(store), src_ch, new_ch
 
 
@@ -112,14 +113,19 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--base", type=Path, required=True, help="store whose layout and kept channels are copied")
     ap.add_argument("--keep", nargs="*", default=[], help="base channels to copy, e.g. Phase3D Nuclei")
     ap.add_argument(
-        "--add", action="append", default=[], metavar="STORE:SRC_CH:NEW_CH", help="channel to add (repeatable)"
+        "--add",
+        action="append",
+        default=[],
+        type=_parse_add,
+        metavar="STORE:SRC_CH:NEW_CH",
+        help="channel to add (repeatable)",
     )
     ap.add_argument("--output", type=Path, required=True, help="new store; refuses to overwrite")
     ap.add_argument("--limit", type=int, default=None, help="copy only the first N positions (smoke tests)")
     args = ap.parse_args(argv)
     if not args.keep and not args.add:
         ap.error("nothing to write: pass --keep and/or --add")
-    assemble(args.base, args.keep, [_parse_add(a) for a in args.add], args.output, args.limit)
+    assemble(args.base, args.keep, args.add, args.output, args.limit)
 
 
 if __name__ == "__main__":

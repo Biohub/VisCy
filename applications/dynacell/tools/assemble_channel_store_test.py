@@ -157,6 +157,16 @@ def test_assemble_refuses_a_missing_channel_before_writing(tmp_path: Path) -> No
     assert not (tmp_path / "o.zarr").exists()
 
 
+@pytest.mark.parametrize("spec", ["x.zarr:Ch", "x.zarr::New", ":Ch:New"])
+def test_main_reports_a_malformed_add_as_a_usage_error(tmp_path: Path, capsys, spec: str) -> None:
+    """``--add`` without STORE:SRC_CHANNEL:NEW_CHANNEL exits through argparse, naming the format."""
+    argv = ["--base", str(tmp_path / "base.zarr"), "--add", spec, "--output", str(tmp_path / "o.zarr")]
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == 2
+    assert "STORE:SRC_CHANNEL:NEW_CHANNEL" in capsys.readouterr().err
+
+
 def test_assemble_refuses_duplicate_names_and_existing_output(tmp_path: Path) -> None:
     """Renaming onto a kept channel and writing over an existing store both raise."""
     _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
