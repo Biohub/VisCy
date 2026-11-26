@@ -6,23 +6,24 @@ virtual-staining models. It covers one loop:
 1. set up a checkout and pick a model;
 2. launch a 3D fit on one GPU or on 4 GPUs with DDP;
 3. run a short, repeatable fit for profiling, and measure seconds per step;
-4. predict full 3D volumes of the DynaCell-lite test set;
+4. predict full 3D volumes of the iPSC test set;
 5. score the predictions with the fast metric tier, to check that a faster run still trains an
    equally good model.
 
-**How the commands were checked (2026-11-23):**
+**How the commands were checked (2026-11-23 and 2026-11-25):**
 - every preview command (`--print-resolved-config`, `--print-script`, `--dry-run`, Hydra
   `--cfg job`) was run and exited 0;
-- the profiling-run recipe of §5 was run for 30 steps on one A40 inside an existing allocation,
-  with the two A40 changes listed there;
+- the data path of §3.1–3.2 was run against the public release: the manifest rewrite, config
+  resolution to the downloaded archive, and the profiling recipe of §5 for 30 steps on one A40
+  reading the training archive directly, with the A40 changes listed in §5;
 - commands marked **(not run)** were not executed;
 - commands ran as the checkout's virtualenv binaries (`.venv/bin/python`, `.venv/bin/dynacell`); the
   `uv run` forms shown are the equivalents.
 
-The running example is nucleus, trained on iPSC. Paths to data stores are not written here: the
-committed dataset manifests under `applications/dynacell/src/dynacell/_manifests/` hold them, and
-the configs resolve them for you. `<run-root>` is any directory you can write to, given as an
-absolute path.
+The running example is nucleus, trained on iPSC. The data come from the public DynaCell release
+on AWS (§3.1). The committed dataset manifests point at the lab's own storage, so §3.2 makes a
+copy that points at your download. `<data-dir>` is where you put the download and `<run-root>` is
+any directory you can write to, both given as absolute paths.
 
 ## 0. The pieces
 
@@ -30,7 +31,7 @@ absolute path.
 |---|---|
 | Branch | `dynacell-fnet2d-vscyto2daug` (VisCy) |
 | Primary single-GPU fit | `applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet3d_vscyto3daug/ipsc_confocal/train.yml` |
-| Primary 4-GPU DDP fit | `.../nucleus/fcmae_vscyto3d_pretrained/ipsc_confocal/train.yml` |
+| Primary 4-GPU DDP fit | `.../nucleus/fcmae_vscyto3d_scratch/ipsc_confocal/train.yml` |
 | Shared config fragments | `.../virtual_staining/_internal/shared/model/{train_sets,targets,data_overlays,model_overlays,launcher_profiles,predict_sets}/` |
 | Base recipes (model, trainer, GPU topology) | `applications/dynacell/configs/recipes/{models,trainer,topology}/` |
 | Launcher | `applications/dynacell/tools/submit_benchmark_job.py` |
@@ -73,8 +74,8 @@ All values are from the resolved nucleus/iPSC leaves (`--print-resolved-config` 
 | `fnet3d_paper` (FNet3D) | `DynacellUNet`, FNet3D | 32×64×64 | 48 (8) | 200k steps | fp32, benchmark + channels-last | 1, any type |
 | `fnet3d_bigpatch` (ablation) | `DynacellUNet`, FNet3D | 32×384×384 | 8 (4) | 200k steps | bf16-mixed, benchmark + channels-last | 1 H200 |
 | **`fnet3d_vscyto3daug`** (FNet3D-VSCyto3DAug) | `DynacellUNet`, FNet3D | 32×600×600 crop → affine → 32×384×384 | 8 (4) | 200k steps | bf16-mixed, benchmark + channels-last | 1 H100 or H200 |
-| `fcmae_vscyto3d_scratch` (UNeXt2) | `DynacellUNet`, fcmae (ConvNeXt V2 U-Net) | 20×600×600 crop → affine → 15×384×384 | 32 per rank (4) | 200 epochs | 16-mixed, benchmark | 4 H100 or H200, DDP |
-| **`fcmae_vscyto3d_pretrained`** (VSCyto3D) | as UNeXt2, encoder loaded from an FCMAE checkpoint | as UNeXt2 | 32 per rank (4) | 200 epochs | 16-mixed, benchmark | 4 H100 or H200, DDP |
+| **`fcmae_vscyto3d_scratch`** (UNeXt2) | `DynacellUNet`, fcmae (ConvNeXt V2 U-Net) | 20×600×600 crop → affine → 15×384×384 | 32 per rank (4) | 200 epochs | 16-mixed, benchmark | 4 H100 or H200, DDP |
+| `fcmae_vscyto3d_pretrained` (VSCyto3D) | as UNeXt2, encoder loaded from an FCMAE checkpoint | as UNeXt2 | 32 per rank (4) | 200 epochs | 16-mixed, benchmark | 4 H100 or H200, DDP |
 | `unetvit3d` (UNetViT3D) | `DynacellUNet`, UNetViT3D | 13×624×624 crop → affine → 8×512×512 | 4 (2) | 20 epochs | bf16-mixed | 1 H200 |
 | `celldiff` (CELL-Diff) | `DynacellFlowMatching` | as UNetViT3D | 4 (2) | 20 epochs | bf16-mixed | 1 H200 |
 | `pix2pix3d_unetvit` (pix2pix3d) | `DynacellGAN`, UNetViT3D generator + 3D PatchGAN | as UNetViT3D | 4 per rank (2) | 40 epochs | bf16-mixed | 4 H200, DDP |
@@ -88,22 +89,22 @@ All values are from the resolved nucleus/iPSC leaves (`--print-resolved-config` 
 - **The published fits mostly ran without the speed flags.** The leaves turn them on now, but of
   the fits timed in Appendix A only one (FNet3D-VSCyto3DAug, membrane) trained with them.
 - **Budgets:** the step budget in one fit is `trainer.max_steps` or `trainer.max_epochs`. For the
-  nucleus/iPSC store (§3.1):
+  nucleus/iPSC store (§3.3):
   - FNet3D-VSCyto3DAug runs 2,600 steps per epoch, so 200k steps are ~77 epochs;
   - VSCyto3D runs 312 steps per epoch on 4 GPUs.
 
-  Both figures are worked out in §3.3. They match the step counts in the published checkpoint
+  Both figures are worked out in §3.5. They match the step counts in the published checkpoint
   names (`epoch=28-step=75400`, `epoch=89-step=28080`).
 
 **Recommended models for profiling:**
 - **Single GPU: `fnet3d_vscyto3daug`.** A plain 3D U-Net with the full augmentation stack, bf16 and
   both speed flags. A step runs through every stage of §6: CPU cropping, GPU augmentations, model
   and optimizer.
-- **Multi-GPU: `fcmae_vscyto3d_pretrained`** (4-GPU DDP). It reads the pretrained encoder from
-  `model.init_args.ckpt_path` when the model is built, so you need read access to that file.
-  `fcmae_vscyto3d_scratch` resolves to the same config without that file (checked by diffing the
-  two resolved configs: only `ckpt_path`, `encoder_only` and the output names differ), so it has
-  the same per-step work.
+- **Multi-GPU: `fcmae_vscyto3d_scratch`** (UNeXt2, 4-GPU DDP). Its pretrained sibling
+  `fcmae_vscyto3d_pretrained` (VSCyto3D) loads an FCMAE encoder checkpoint from the lab's storage,
+  and that checkpoint is not part of the public release. The two resolve to the same config apart
+  from that file (checked by diffing the two resolved configs: only `ckpt_path`, `encoder_only`
+  and the output names differ), so the scratch fit has the same per-step work.
 
 ## 2. Set up once
 
@@ -117,30 +118,121 @@ uv run wandb login                 # or: export WANDB_MODE=offline
 - **Use your own checkout.** The rendered sbatch script runs `uv run` from the repository that holds
   the launcher you called.
 - **Module loading is site-specific.** The sbatch template loads uv with `ml uv`. On a cluster
-  without that module, put `uv` on `PATH` and edit that line in your copy.
-- **Access:**
-  - read access to the train and test stores named in the manifests;
-  - read access to the lite ground-truth caches;
-  - write access to your own `<run-root>`.
+  without that module, put `uv` on `PATH` and edit that line in your copy (§4.2 lists the other
+  site settings).
+- **What you need:**
+  - the data of §3.1 (about 92 GB for the nucleus/membrane training archive and 7.5 GB for its test
+    archive) on a filesystem the GPU nodes can read;
+  - write access to your own `<run-root>`;
+  - host memory for the staged training copy (§3.6), about 101 GB for nucleus/iPSC.
 - **Interactive GPU work** (predict, eval, short fits) runs inside an allocation, for example
-  `srun -p gpu --gres=gpu:1 -c 16 --mem=128G -t 4:00:00 --pty bash`.
+  `srun -p <partition> --gres=gpu:1 -c 16 --mem=128G -t 4:00:00 --pty bash`.
 
 ## 3. Data
 
-### 3.1 The training store
+### 3.1 Download the iPSC data from AWS
 
-- **Format:** HCS OME-Zarr v0.5 (Zarr v3).
-- **Which store:** nucleus and membrane train on the full-Z `cell.zarr` (`targets.nucleus.stores.train`
-  in `_manifests/aics-hipsc/manifest.yaml`). ER and mitochondria train on separate stores
-  (`SEC61B.zarr`, `TOMM20.zarr`), whose target channel is `Structure`.
+The DynaCell release is a public S3 bucket, `s3://dynacell/v1/`, readable without an AWS account
+(registry entry: <https://registry.opendata.aws/dynacell/>). The iPSC data used here are in
+`data/aics-hipsc/`:
+
+| Archive | Training split | Test split | Targets it serves |
+|---|---|---|---|
+| `cell.ozx` | 85 GiB (500 FOVs) | 7.0 GiB (100 FOVs) | nucleus, membrane |
+| `SEC61B.ozx` | 83 GiB (423 FOVs) | 8.0 GiB | ER |
+| `TOMM20.ozx` | 96 GiB (500 FOVs) | 7.9 GiB | mitochondria |
+
+For the nucleus example you need only `cell.ozx`, both splits:
+
+```sh
+mkdir -p <data-dir>/aics-hipsc/train <data-dir>/aics-hipsc/test
+aws s3 cp --no-sign-request s3://dynacell/v1/data/aics-hipsc/train/cell.ozx <data-dir>/aics-hipsc/train/
+aws s3 cp --no-sign-request s3://dynacell/v1/data/aics-hipsc/test/cell.ozx  <data-dir>/aics-hipsc/test/
+```
+
+- **Without the AWS CLI**, each file is also served over HTTPS at
+  `https://dynacell.s3.us-west-2.amazonaws.com/v1/<path>`, for example
+  `.../v1/data/aics-hipsc/train/cell.ozx`.
+- **Keep the layout** `<data-dir>/aics-hipsc/{train,test}/<name>.ozx`; §3.2 assumes it.
+- **Browse the rest** with `aws s3 ls --no-sign-request s3://dynacell/v1/`. The bucket README
+  lists every archive. The A549 data (`data/biohub-a549/`, 577 GiB) are not needed here.
+- **Licence.** The iPSC data are a derivative of the Allen Institute hiPSC Single-cell Image
+  Dataset and are redistributed under the Allen Institute Terms of Use, which permit research and
+  noncommercial use (`data/aics-hipsc/README.md` in the bucket). The A549 data are CC-BY-4.0.
+
+**What an `.ozx` file is.** It is a single-file OME-Zarr: a zip archive, stored without
+compression, that holds the Zarr v3 store. The code opens it in place through iohub, so there
+is no need to unpack it: the 30-step fit of §5 read the training archive directly, and the
+evaluation resolves its ground truth to the test archive (§8). Checked against the lab's working
+stores (2026-11-25):
+- all three training archives and the `cell.ozx` test archive hold the same FOVs, and the planes
+  compared (one FOV each) are bitwise identical;
+- the normalization statistics match in every FOV. The lab copy of `cell.zarr` carries one extra
+  statistic, `otsu_threshold`, which no 3D leaf reads.
+
+### 3.2 Point the configs at your download
+
+The configs never name a data path. They name a dataset and a target
+(`benchmark.dataset_ref`), and the code looks up the paths in a dataset manifest
+(`_manifests/aics-hipsc/manifest.yaml`). The committed manifest points at the lab's storage. Make
+a copy that points at `<data-dir>`, then tell the code to search your copy first. Save this as
+`rewrite_manifest.py` and run it from the repository root:
+
+```python
+import shutil
+import sys
+from pathlib import Path
+
+import yaml
+
+data = Path(sys.argv[1]).resolve()  # <data-dir>
+src = Path("applications/dynacell/src/dynacell/_manifests/aics-hipsc")
+dst = data / "manifests" / "aics-hipsc"
+shutil.copytree(src, dst, dirs_exist_ok=True)
+manifest = yaml.safe_load((dst / "manifest.yaml").read_text())
+for name, target in manifest["targets"].items():
+    stores = target["stores"]
+    archive = Path(stores["train"]).stem + ".ozx"  # cell, SEC61B or TOMM20
+    target["stores"] = {
+        "train": str(data / "aics-hipsc" / "train" / archive),
+        "test": str(data / "aics-hipsc" / "test" / archive),
+        "gt_cache_dir": str(data / "eval_cache" / name),
+    }
+(dst / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+print(f"export DYNACELL_MANIFEST_ROOTS={data / 'manifests'}")
+```
+
+```sh
+uv run python rewrite_manifest.py <data-dir>
+export DYNACELL_MANIFEST_ROOTS=<data-dir>/manifests     # the line the script prints
+```
+
+- **`DYNACELL_MANIFEST_ROOTS`** is a list of directories (separated by `:`) searched before the
+  committed manifests; the first `<root>/<dataset>/manifest.yaml` found wins
+  (`dynacell/data/resolver.py`). Set it in every shell that renders a config (§4), predicts (§7)
+  or evaluates (§8).
+- **The rewrite drops `cell_segmentation`**, the lab's cleaned cell masks of the test set. They
+  are not in the release. The evaluation requires them only with `compute_feature_metrics=true`
+  or `compute_cell_similarity=true`, and the fast tier of §8 sets neither.
+- **`gt_cache_dir`** is where the evaluation caches ground-truth masks. It starts empty; the
+  first evaluation fills it (§8).
+- **Check it:** `--print-resolved-config` (§4.2) should show
+  `data_path: <data-dir>/aics-hipsc/train/cell.ozx`.
+
+### 3.3 The training store
+
+- **Format:** HCS OME-Zarr v0.5 (Zarr v3), inside the `.ozx` archive (§3.1).
+- **Which store:** nucleus and membrane train on the full-Z `cell.ozx` (`targets.nucleus.stores.train`
+  in the manifest). ER and mitochondria train on separate archives (`SEC61B.ozx`, `TOMM20.ozx`),
+  whose target channel is `Structure`.
 - **Shape:**
   - 500 FOVs, each `(T, C, Z, Y, X) = (1, 4, 44, 624, 924)`, float32;
-  - chunks `(1, 1, 8, 512, 512)`;
+  - chunks `(1, 1, 8, 512, 512)`, grouped into one shard per FOV and channel;
   - channels `Brightfield`, `Nuclei`, `Membrane`, `Phase3D`.
 - **Source and target:** source `Phase3D`, target `Nuclei`.
 - **Voxel spacing** (manifest): 0.290 µm in Z, 0.108 µm in Y and X.
 
-### 3.2 Normalization statistics
+### 3.4 Normalization statistics
 
 - **Computing them:** `uv run viscy preprocess --data_path <store> --channel_names '["Phase3D"]'`
   writes, into every FOV's attributes under `normalization`, per-channel `dataset_statistics`,
@@ -150,9 +242,9 @@ uv run wandb login                 # or: export WANDB_MODE=offline
   - FNet3D: `fov_statistics` mean/std for both channels;
   - VSCyto3D, UNeXt2 and UNetViT3D: mean/std for `Phase3D` and median/IQR for `Nuclei`
     (`targets/nucleus.yml`).
-- **The registered stores already carry them.** Do not run `preprocess` on a shared store.
+- **The released archives already carry them** (§3.1). Do not run `preprocess` on them.
 
-### 3.3 How a training batch is built
+### 3.5 How a training batch is built
 
 1. **Dataset item.** `SlidingWindowDataset` serves one window per index: one FOV and timepoint,
    `z_window_size` consecutive planes at full Y and X, for source and target. The dataset length is
@@ -196,7 +288,7 @@ uv run wandb login                 # or: export WANDB_MODE=offline
   `num_samples`. A joint leaf therefore gets `batch_size × num_samples` patches per step.
 - The repository root `CLAUDE.md` (*Joint vs single-set training batch semantics*) has the table.
 
-### 3.4 Loading, caching and worker settings
+### 3.6 Loading, caching and worker settings
 
 These are the `HCSDataModule` arguments that set the I/O path (`hcs.py`):
 
@@ -228,8 +320,8 @@ FNet3D and 4-GPU leaves request 512 GB of host memory (UNetViT3D and CELL-Diff r
 
 ### 4.1 Make your own copy of the leaf
 
-The committed leaves write logs, checkpoints and sbatch files into the lab's model directories.
-**Do not submit or resume them.** Make a copy whose base is the committed leaf, with your own
+The committed leaves write logs, checkpoints and sbatch files into the lab's model directories,
+which do not exist on your cluster. Make a copy whose base is the committed leaf, with your own
 output directories:
 
 `applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet3d_vscyto3daug_hpc/ipsc_confocal/train.yml`:
@@ -270,14 +362,15 @@ launcher:
 `trainer.callbacks` list. An override cannot reach a list entry, so the checkpoints would still
 go to the lab's folder.
 
-**For VSCyto3D (4-GPU):** make `nucleus/fcmae_vscyto3d_pretrained_hpc/ipsc_confocal/train.yml` the
+**For UNeXt2 (4-GPU):** make `nucleus/fcmae_vscyto3d_scratch_hpc/ipsc_confocal/train.yml` the
 same way:
-- `base: [../../fcmae_vscyto3d_pretrained/ipsc_confocal/train.yml]`;
+- `base: [../../fcmae_vscyto3d_scratch/ipsc_confocal/train.yml]`;
 - `save_top_k: 5`;
 - your own names and `<run-root>` paths.
 
-Both copies were composed and previewed (`--print-resolved-config`, `--print-script`); the FNet3D
-copy was also staged with `--dry-run`.
+Both copies were composed against the public-data manifest of §3.2 and previewed
+(`--print-resolved-config`, `--print-script` with the site overrides below); the FNet3D copy was
+also staged with `--dry-run`.
 
 ### 4.2 Preview, then submit
 
@@ -290,9 +383,13 @@ uv run python applications/dynacell/tools/submit_benchmark_job.py $LEAF         
 ```
 
 **Check in `--print-resolved-config`:**
+- `data_path: <data-dir>/aics-hipsc/train/cell.ozx` (§3.2);
 - `precision: bf16-mixed`, `benchmark: true` and `channels_last: true`;
 - `max_steps: 200000`;
 - your `dirpath` and `save_dir`.
+
+The launcher resolves the data path when it renders the job and writes it into
+`<run_root>/resolved/fit_*.yml`, so the job itself does not need `DYNACELL_MANIFEST_ROOTS`.
 
 **What the rendered sbatch does:**
 1. sets the `#SBATCH` lines from the `launcher.sbatch` block;
@@ -308,12 +405,26 @@ uv run python applications/dynacell/tools/submit_benchmark_job.py $LEAF         
 - To change the GPU count, override all three together, for example
   `--override trainer.devices=2 --override launcher.sbatch.ntasks_per_node=2 --override launcher.sbatch.gpus=2`
   (previewed).
-- A different GPU count changes the global batch (§3.3) and, for the `WarmupCosine` schedule, the
+- A different GPU count changes the global batch (§3.5) and, for the `WarmupCosine` schedule, the
   learning-rate curve, because the schedule length is `trainer.estimated_stepping_batches`.
 
 **Other hardware settings** come from the `launcher_profiles/hardware_*.yml` the leaf composes.
 Override any of them with `--override launcher.sbatch.<key>=<value>`, where the keys are
 `partition`, `constraint`, `mem`, `time`, `cpus_per_task` and `exclude`.
+
+**Site settings to change for your cluster.** The committed profiles and template are written
+for the lab's SLURM cluster:
+
+| Setting | Committed value | Change it with |
+|---|---|---|
+| Partition | `gpu` | `--override launcher.sbatch.partition=<partition>` |
+| GPU type | `constraint: "h100\|h200"` (4-GPU), `"h200"` or `"h100\|h200"` (1-GPU); these are the lab's node feature names | `--override launcher.sbatch.constraint=<feature>`, or `=null` to drop the line |
+| Hugging Face cache | `launcher.env.HF_HUB_CACHE`, a lab directory (`runtime_shared.yml`) | `--override launcher.env.HF_HUB_CACHE=<dir>` |
+| uv | `ml uv` in `tools/sbatch_template.sbatch` | edit the line in your checkout |
+
+Wall-time limits (`time`, 4 days for most fits) and memory (`mem`) are also sized for that
+cluster; check them against your partition's limits. The override forms above were previewed
+with `--print-script`.
 
 ### 4.3 Run directly inside an allocation
 
@@ -359,11 +470,18 @@ uv run python applications/dynacell/tools/submit_benchmark_job.py $LEAF --print-
 cd $PROF && uv run --project <checkout> dynacell fit -c $PROF/fit.yml
 ```
 
-**What was run:** this recipe for 30 steps on one A40 (48 GB), with two A40-only changes:
-- `--override data.init_args.batch_size=4`: the leaf's batch 8 is sized for 80 GB cards (leaf comment), and batch 8 was not tried on the A40;
-- `--override data.init_args.mmap_preload=false`, to skip the ~100 GB staging.
+**What was run (2026-11-25):** this recipe for 30 steps on one A40 (48 GB), reading the public
+`cell.ozx` through the manifest of §3.2, with two A40-only changes:
+- `--override data.init_args.batch_size=4`: the leaf's batch 8 is sized for 80 GB cards (leaf
+  comment), and batch 8 was not tried on the A40;
+- `--override 'data.init_args.include_fov_names=[4/10615/1304,4/10625/1347,...]'` (the first 10
+  FOVs), so the staged copy was 1.9 GB instead of ~101 GB. Staging (`mmap_preload: true`) ran.
 
-For profiling, keep the leaf's batch and `mmap_preload: true` on the GPUs the launcher asks for.
+The run ended with ``Trainer.fit` stopped: `max_steps=30` reached.`` and exit code 0.
+
+For profiling, keep the leaf's batch, all FOVs and `mmap_preload: true` on the GPUs the launcher
+asks for. A smaller FOV list is a quick way to check the pipeline end to end, but it changes the
+epoch length and the staging time, so do not time with it.
 
 **Profilers:** `trainer.profiler` also accepts `advanced` (cProfile) and `pytorch` (the torch
 profiler, with traces). The SimpleProfiler prints a per-action table to stdout at the end of the fit; the check run printed these rows:
@@ -376,13 +494,13 @@ CUDA calls are asynchronous, so the split of GPU time between `on_after_batch_tr
 `run_training_batch` is approximate. Use `trainer.profiler=pytorch` for a GPU timeline.
 
 **Through sbatch:** pass the same overrides to `submit_benchmark_job.py` without
-`--print-resolved-config`. Add `--override 'launcher.sbatch.time="01:00:00"'` (previewed), and a `launcher.run_root`
-you can write to. **(not run)**
+`--print-resolved-config`, together with the site overrides of §4.2. Add
+`--override 'launcher.sbatch.time="01:00:00"'` (previewed). **(not run)**
 
 **What a short run changes:**
 - **No validation pass.** Validation runs at the end of each epoch (every 2,600 steps here), so a
   run shorter than one epoch has none.
-- **Startup cost.** With `mmap_preload: true`, staging (§3.4) happens before step 1. Time it
+- **Startup cost.** With `mmap_preload: true`, staging (§3.6) happens before step 1. Time it
   separately from the steps.
 - **Warm-up.** cuDNN autotuning (`benchmark: true`) makes the first steps slower and briefly raises
   peak GPU memory.
@@ -458,27 +576,23 @@ the path a step takes, with the place to look for each stage:
   bf16-mixed, measured on the `fnet3d_bigpatch` arm.
 - `hardware_4gpu.yml` records a peak of about 110 GB for single-store staging.
 
-## 7. Predict full 3D volumes on DynaCell-lite
+## 7. Predict full 3D volumes of the iPSC test set
 
-DynaCell-lite is a smaller test set:
-- 50 of the 100 iPSC test FOVs;
-- the A549 test FOVs at 5 of 10 timepoints.
+The test split of §3.1 (`test/cell.ozx`) holds the 100 held-out iPSC FOVs, each
+`(1, 4, 40, 512, 512)`. The committed leaves also predict *DynaCell-lite*, a 50-FOV subset that
+the lab uses for fast comparisons, but its stores are not in the public release; use the full
+test set.
 
-It reproduces the full benchmark's model rankings. It lives in its own `*-lite` manifests and is a
-separate dataset, never an override of the full one (`applications/dynacell/CLAUDE.md`,
-*DynaCell-lite*).
+**The committed predict leaf** for this model,
+`nucleus/fnet3d_vscyto3daug/ipsc_confocal/predict__ipsc_confocal.yml`, points its checkpoint and
+output at the lab's storage. Write a copy next to your fit copy, with your own paths:
 
-**Lite predict leaves exist** for `fcmae_vscyto3d_pretrained`, `fcmae_vscyto3d_scratch`,
-`fnet3d_paper`, `unetvit3d` and `celldiff`, named `predict__<set>_lite.yml`. **`fnet3d_vscyto3daug`
-has none**, and an `--override` cannot re-point `dataset_ref` to the lite dataset (§0). Write one
-next to your fit copy:
-
-`.../nucleus/fnet3d_vscyto3daug_hpc/ipsc_confocal/predict__ipsc_confocal_lite.yml`:
+`.../nucleus/fnet3d_vscyto3daug_hpc/ipsc_confocal/predict__ipsc_confocal.yml`:
 
 ```yaml
-# Lite 3D predict of the HPC-team FNet3D-VSCyto3DAug fit on the iPSC lite test set.
+# 3D predict of the HPC-team FNet3D-VSCyto3DAug fit on the iPSC test set.
 base:
-  - ../../../_internal/shared/model/predict_sets/ipsc_confocal_lite.yml
+  - ../../../_internal/shared/model/predict_sets/ipsc_confocal.yml
   - ../../../_internal/shared/model/targets/nucleus.yml
   - ../../../_internal/shared/model/model_overlays/fnet3d_paper_predict.yml
   - ../../../_internal/shared/model/launcher_profiles/mode_predict.yml
@@ -489,9 +603,9 @@ benchmark:
   task: virtual_staining
   organelle: nucleus
   trained_on: ipsc_confocal
-  predict_set: ipsc_confocal_lite
+  predict_set: ipsc_confocal
   model_name: fnet3d_vscyto3daug_hpc
-  experiment_id: nucleus__ipsc_confocal__fnet3d_vscyto3daug_hpc__ipsc_confocal_lite
+  experiment_id: nucleus__ipsc_confocal__fnet3d_vscyto3daug_hpc__ipsc_confocal
 
 model:
   init_args:
@@ -508,28 +622,23 @@ trainer:
   callbacks:
     - class_path: viscy_utils.callbacks.prediction_writer.HCSPredictionWriter
       init_args:
-        output_store: <run-root>/lite/nucleus/fnet3d_vscyto3daug_hpc/ipsc/ipsc/prediction.zarr
+        output_store: <run-root>/predict/nucleus/fnet3d_vscyto3daug_hpc/ipsc/ipsc/prediction.zarr
 
 launcher:
-  job_name: FNet3DVSAug_hpc_PRED_NUCL_LITE
-  run_root: <run-root>/lite/nucleus/fnet3d_vscyto3daug_hpc/ipsc/ipsc
+  job_name: FNet3DVSAug_hpc_PRED_NUCL
+  run_root: <run-root>/predict/nucleus/fnet3d_vscyto3daug_hpc/ipsc/ipsc
 ```
 
-**For A549 lite (out of domain), change three things:**
-- the first base to `predict_sets/a549_mantis_h2b_<c>_lite.yml`, where `<c>` is `mock`, `denv` or
-  `zikv`;
-- `benchmark.predict_set` to match, and add `benchmark.dataset_ref.target: h2b`;
-- the output folder `.../ipsc/a549__<c>/`.
-
-The committed `nucleus/fnet3d_paper/ipsc_confocal/predict__a549_mantis_<c>_lite.yml` show the
-layout.
+With `DYNACELL_MANIFEST_ROOTS` set (§3.2), the predict set resolves to
+`<data-dir>/aics-hipsc/test/cell.ozx`.
 
 **Run it:**
 
 ```sh
-P=applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet3d_vscyto3daug_hpc/ipsc_confocal/predict__ipsc_confocal_lite.yml
+P=applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet3d_vscyto3daug_hpc/ipsc_confocal/predict__ipsc_confocal.yml
 uv run python applications/dynacell/tools/submit_benchmark_job.py $P --print-resolved-config     # previewed
-uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best --override launcher.sbatch.constraint=<gpu-type>   # (not run)
+uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best \
+  --override launcher.sbatch.partition=<partition> --override launcher.sbatch.constraint=<gpu-type>   # (not run)
 ```
 
 **What predict does:**
@@ -539,7 +648,7 @@ uv run python applications/dynacell/tools/submit_benchmark_job.py $P --ckpt best
 - **VSCyto3D and UNeXt2** do the same with 15-plane windows.
 - **UNetViT3D and pix2pix3d** tile each window into 8×512×512 patches (`sliding_window`, overlap
   `[4, 256, 256]`). pix2pix3d also averages 4 shifted tilings (`predict_phase_shifts`).
-- **CELL-Diff** samples iteratively; the lite uses a fast recipe (`model_overlays/celldiff_predict_lite.yml`).
+- **CELL-Diff** samples iteratively, which makes it by far the slowest to predict.
 
 **Flags:**
 - **`--ckpt best`:** reads `best_model_path` from the newest `last*.ckpt`, the checkpoint with the
@@ -558,12 +667,12 @@ The fast tier computes:
   plane of each volume (`segmentation.dimension: 2d`, `slice_selection: focus`, the defaults).
 
 It skips the deep-feature and CellProfiler-style feature metrics. Run it inside an allocation with
-at least 40 GB of GPU memory:
+at least 40 GB of GPU memory, with `DYNACELL_MANIFEST_ROOTS` set (§3.2):
 
 ```sh
-OUT=<run-root>/lite/nucleus/fnet3d_vscyto3daug_hpc/ipsc/ipsc
+OUT=<run-root>/predict/nucleus/fnet3d_vscyto3daug_hpc/ipsc/ipsc
 uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evaluate \
-  target=nucleus +benchmark.dataset_ref.dataset=aics-hipsc-lite \
+  target=nucleus +benchmark.dataset_ref.dataset=aics-hipsc \
   io.pred_path=$OUT/prediction.zarr \
   io.pred_cache_dir=$OUT/eval_cache_pred \
   save.save_dir=$OUT/eval \
@@ -572,17 +681,21 @@ uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evalua
   force_recompute.pred_masks=true force_recompute.pred_instances=true
 ```
 
-- **Checked:** the command composes (Hydra `--cfg job`, exit 0), and the lite manifest supplies the
-  ground-truth store, `Nuclei_prediction` / `Nuclei` and spacing `[0.29, 0.108, 0.108]`.
+- **Checked (2026-11-25):** the command composes (Hydra `--cfg job`, exit 0), and with the
+  manifest of §3.2 the dataset lookup supplies the ground truth `<data-dir>/aics-hipsc/test/cell.ozx`,
+  the cache folder `<data-dir>/eval_cache/nucleus`, the channels `Nuclei_prediction` / `Nuclei`
+  and the spacing `[0.29, 0.108, 0.108]`.
 - **Not run:** the evaluation itself.
 - **No `focus2d` setting:** that is the 2D benchmark. Leaving it unset scores pixel metrics on the
   full volume.
-- **A549 lite:** replace the first line's dataset settings with
-  `target_name=nucleus +benchmark.dataset_ref.dataset=a549-mantis-h2b-<c>-lite +benchmark.dataset_ref.target=h2b`.
+- **Model downloads.** `cellpose` downloads the cpdino (Cellpose-DINO) weights on first use from
+  its public Hugging Face repository into `~/.cellpose/models`, or `$CELLPOSE_LOCAL_MODELS_PATH`
+  (read from `cellpose/models.py`; not tried from outside the lab). Compute nodes without internet
+  access need that file copied in beforehand.
 - **Caches:**
-  - ground-truth caches are shared and read from the manifest's `gt_cache_dir`. They exist for the
-    lite sets; a cache miss is filled in place (`io.require_complete_cache: false`), which needs
-    write access there;
+  - ground-truth masks are cached in the manifest's `gt_cache_dir`. Your copy starts empty, so the
+    first evaluation segments the ground truth and fills it (`io.require_complete_cache: false`);
+    later evaluations reuse it;
   - prediction caches go to your `io.pred_cache_dir`;
   - the `force_recompute.pred_*` flags stop a re-predicted store from being scored with stale masks.
 - **Outputs** in `save.save_dir`:
@@ -596,15 +709,21 @@ uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evalua
 3. Score both with the command above.
 4. Compare `PCC`, `SI_SSIM`, `Spectral_PCC`, `XY_FSC_Resolution` and `Z_FSC_Resolution` in
    `pixel_metrics.csv`, and `Dice` and `mAP` in `mask_metrics.csv` (column names read from an
-   existing 3D lite evaluation).
+   existing 3D evaluation).
 5. Judge any difference against the spread between two reference fits that differ only in the seed.
    Crop sampling is random (§5.2), so a single pair of runs never matches exactly.
 
 **Notes:**
 - **GPU type matters.** cpdino segments in bf16, so instance masks differ by GPU type: per-row Dice
   medians by ≤ 3e-4, single frames by up to ~0.1.
-- **Lite is validated for rankings.** It is not validated for small differences. Confirm a small
-  effect on the full test set (the `aics-hipsc` and `a549-mantis-h2b-<c>` datasets).
+- **Published reference checkpoints.** The release holds trained iPSC nucleus checkpoints of the
+  FNet3D (paper), UNeXt2 and VSCyto3D families, each with its training config, under
+  `s3://dynacell/v1/models/ipsc/nucleus/{fnet3d,unext2,vscyto3d}/`. No FNet3D-VSCyto3DAug
+  checkpoint is published, so a reference for that model has to be trained.
+- **Out of domain (A549).** The lab also scores iPSC-trained models on A549 cells. The A549 test
+  archives are in the release (`data/biohub-a549/test/H2B_<condition>.ozx`), but the A549
+  manifests have a different store layout, and rewriting them for the public archives was not
+  checked.
 
 ## 9. Gotchas
 
@@ -618,7 +737,7 @@ uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evalua
     epochs, not the latest.
 - **A rank killed for running out of memory can hang a DDP fit.** The other ranks wait in a
   collective with their GPUs busy, so `squeue` shows RUNNING and CPU use looks normal. Watch the
-  wandb heartbeat. Size `--mem` for the staged copy plus the workers (§3.4).
+  wandb heartbeat. Size `--mem` for the staged copy plus the workers (§3.6).
 - **A NODE_FAIL requeue restarts from scratch.** SLURM requeues the job with its original
   sbatch script, which has no `--ckpt_path` unless it was submitted with `--resume`. Cancel the
   requeued job and resubmit with `--resume`.
@@ -648,13 +767,16 @@ uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evalua
 
 ## 10. Not covered or not run
 
+- Anything on a cluster other than the lab's. The download was not repeated: the checks read the
+  lab's byte-for-byte mirror of the S3 bucket.
 - Submitting any fit or predict through sbatch from these copies; only previews and `--dry-run`
   ran.
 - A 4-GPU fit, or a direct `srun` DDP launch.
-- The fast-tier evaluation itself (only its composition was checked).
-- A profiling run with `mmap_preload: true` and the leaf's batch size (the A40 check used
-  `false` and batch 4).
-- Reference lite metric values for the baseline fits.
+- A predict from the public test archive, and the fast-tier evaluation itself (only their
+  configuration was checked).
+- A profiling run with all FOVs staged and the leaf's batch size (the A40 check used 10 FOVs and
+  batch 4).
+- Reference metric values for the baseline fits.
 - A per-stage timing breakdown (Appendix A has whole-step rates only).
 
 ## Appendix A: training times and hardware
@@ -675,7 +797,7 @@ iPSC + A549.
     checkpoint step counts are twice its batch counts.
 - **Patches/s and Mvox/s (derived).**
   - Patches/s = global patches per batch ÷ s/batch, where global patches per batch = `batch_size`
-    × GPUs (§3.3).
+    × GPUs (§3.5).
   - Mvox/s = patches/s × the voxels in the network patch.
   - Patch sizes differ by up to 26× between families, so compare families by Mvox/s, not by
     patches/s.
@@ -704,9 +826,9 @@ These are the sbatch requests and data settings of the fits that were timed.
 | CELL-Diff 3D | 1 × H200 | 32 | 256 GB | 4 | bf16 mixed | 8×512×512 | 13×624×624 | 4 | 20 epochs × 6,400 = 128,000 |
 | pix2pix3D | 4 × H200, DDP | 8 × 4 | 512 GB | 4 | bf16 mixed | 8×512×512 | 13×624×624 | 4 × 4 = 16 | 40 epochs × 1,600 = 64,000 |
 
-Every family stages its train store to `/dev/shm` (§3.4). The stores are 68–104 GB (apparent size
+Every family stages its train store to `/dev/shm` (§3.6). The stores are 68–104 GB (apparent size
 measured with `du`; iPSC: `cell.zarr` 92 GB, `SEC61B.zarr` 90 GB, `TOMM20.zarr` 104 GB), which is
-why the host-memory requests are large.
+why the host-memory requests are large. The public iPSC training archives of §3.1 are 89–104 GB.
 
 ### A.3 iPSC-trained fits
 
