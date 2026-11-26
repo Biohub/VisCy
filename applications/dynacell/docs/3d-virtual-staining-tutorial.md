@@ -571,8 +571,11 @@ the path a step takes, with the place to look for each stage:
 | Checkpoints: top-k by `loss/validate`, plus `latest-*` and `last.ckpt` | every epoch | `ModelCheckpoint`, extra callback added by `cli.py` | `every_n_epochs`, `save_top_k` |
 
 **Measured numbers already in the configs:**
-- `model_overlays/fnet3d_paper_fit.yml` records 0.493 s/step with `benchmark` and `channels_last`
-  against 0.918 s/step without them, on one H200, with training loss within the run-to-run spread.
+- `model_overlays/fnet3d_paper_fit.yml`, which every FNet3D fit leaf composes, records 0.493 s/step
+  with `benchmark` and `channels_last` against 0.918 s/step without them, on one H200, with
+  training loss within the run-to-run spread. The measurement was a set of 3,000-step pilots of
+  the FNet3D-VSCyto3DAug nucleus recipe (384×384×32 patch, bf16-mixed), not of the 64×64
+  `fnet3d_paper` patch.
 - The `fnet3d_vscyto3daug` leaf records about 41 GB of GPU memory for a 384×384×32 patch at
   bf16-mixed, measured on the `fnet3d_bigpatch` arm.
 - `hardware_4gpu.yml` records a peak of about 110 GB for single-store staging.
@@ -878,13 +881,28 @@ about 39,000 batches were run again after a resume from an older checkpoint.
 - **GPU type changes within a family.** FNet3D (paper) ran on five GPU types, and within one type
   its s/batch varies by up to 2.5× between targets and stores. These tables therefore do not give
   per-GPU speed-ups. Compare GPU types only on the same leaf and store.
-- **FCMAE 3D runs at similar rates on H100 and H200** (inferred, not tested). Across FCMAE 3D jobs
-  with more than 5,000 fitted batches, s/batch spans 4.53–6.01 on H100 (18 jobs) and 4.62–5.94 on
-  H200 (22 jobs). The two ranges overlap, which would fit a step limited by data loading or DDP
-  synchronization rather than GPU compute. A per-stage timer (§5, `trainer.profiler`) or a fit on
-  synthetic data on one node would test this. This 4-GPU family costs the most GPU-hours.
-- **Speed flags measured in isolation.** On one H200, `fnet3d_paper` ran at 0.493 s/step with
-  `benchmark` and `channels_last` and at 0.918 s/step without them. This figure comes from
-  `model_overlays/fnet3d_paper_fit.yml`; the timed fits above predate the flags.
+- **FCMAE 3D runs at similar rates on H100 and H200.** Across FCMAE 3D jobs with more than 5,000
+  fitted batches, s/batch spans 4.53–6.01 on H100 (18 jobs) and 4.62–5.94 on H200 (22 jobs). These
+  fits ran without `trainer.benchmark`. The pilots below suggest why the GPU type mattered little:
+  without cuDNN autotuning, the UNeXt2-3D step took about 4.3 s even on one H200 (inferred; a
+  4-GPU fit with `benchmark` on both GPU types would test it). This 4-GPU family costs the most
+  GPU-hours.
+- **Speed flags measured in isolation** (2026-10-11, one H200 per pilot, steady s/step from wandb
+  as in §5.1):
+
+  | Recipe | Steps | Default | `benchmark` | + `channels_last` | + `compile_model` |
+  |---|---|---|---|---|---|
+  | FNet3D-VSCyto3DAug, nucleus, 1 GPU | 3,000 | 0.918 (replicate 0.921) | 0.910 | 0.493 | 0.475 |
+  | UNeXt2-3D (`fcmae_vscyto3d_scratch`), membrane, 1 GPU | 400 | 4.322 (replicate 4.354) | 0.900 | not run alone; 0.642 together with `compile_model` | 0.640 (without `channels_last`) |
+  | UNeXt2-3D, membrane, 4-GPU DDP | 300 | not run | 0.930 | — | 1.173 (without `channels_last`) |
+
+  - The FNet3D training loss with the flags stayed within the spread between two default runs.
+    The UNeXt2 comparison rests on one replicate pair over 400 steps inside the learning-rate
+    warm-up, so it is weaker evidence.
+  - `compile_model` slowed the 4-GPU DDP pilot. The cause is not known.
+  - The committed fit overlays turn on `benchmark` for FNet3D and FCMAE, and `channels_last` for
+    FNet3D. The timed fits in A.3 and A.4 mostly predate this, so a new fit with the committed
+    leaves should run faster than those tables show.
+  - No pilot measured `fnet3d_paper`'s 64×64 patch, UNetViT3D, CELL-Diff or pix2pix3D.
 - **Precision is set per family:** fp32 for FNet3D (paper), fp16 mixed for FCMAE 3D and UNeXt2,
   and bf16 mixed for the rest.
