@@ -19,13 +19,23 @@ The running example is nucleus, trained on iPSC. The variant tag is `wo1`: one w
 | Baseline train config | `applications/dynacell/configs/benchmarks/virtual_staining/nucleus/fnet2d_vscyto2daug/ipsc_confocal/train.yml` |
 | Second seed of the baseline | `.../nucleus/fnet2d_vscyto2daug_seed1/ipsc_confocal/train.yml` |
 | Baseline lite predict configs | `.../nucleus/fnet2d_vscyto2daug{,_seed1}/ipsc_confocal/predict__{ipsc_confocal,a549_mantis_h2b_{mock,denv,zikv}}_lite.yml` |
-| iPSC train store (5-plane in-focus slab) | `/hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/cell_focus.zarr` |
-| Its full-Z source | `/hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/cell.zarr` (500 FOVs, channels Brightfield, Nuclei, Membrane, Phase3D) |
-| iPSC lite test store | `/hpc/projects/virtual_staining/training/dynacell_lite/ipsc/dataset_v4/test_cropped/cell.zarr` (50 FOVs, (1, 4, 40, 512, 512)) |
-| A549 lite test stores | `/hpc/projects/virtual_staining/training/dynacell_lite/a549/mantis/test/dual_nucl_memb_{mock,DENV,ZIKV}.zarr` (12 FOVs × 5 timepoints, (5, 4, 48, 640, 960)) |
-| Lite plane files (which Z planes a 2D model predicts) | `/hpc/projects/virtual_staining/training/dynacell_lite/focus2d_planes/nucleus/{ipsc,a549__mock,a549__denv,a549__zikv}__h1.json` |
+| iPSC train store (5-plane in-focus slab) | `<train-dir>/cell_focus.zarr` |
+| Its full-Z source | `<train-dir>/cell.zarr` (500 FOVs, channels Brightfield, Nuclei, Membrane, Phase3D) |
+| iPSC lite test store | `<lite-dir>/ipsc/dataset_v4/test_cropped/cell.zarr` (50 FOVs, (1, 4, 40, 512, 512)) |
+| A549 lite test stores | `<lite-dir>/a549/mantis/test/dual_nucl_memb_{mock,DENV,ZIKV}.zarr` (12 FOVs × 5 timepoints, (5, 4, 48, 640, 960)) |
+| Lite plane files (which Z planes a 2D model predicts) | `<lite-dir>/focus2d_planes/nucleus/{ipsc,a549__mock,a549__denv,a549__zikv}__h1.json` |
 | Tool to build stores with new channels | `applications/dynacell/tools/assemble_channel_store.py` |
 | Tool to cut the 5-plane train slab | `applications/dynacell/tools/extract_focus_slab_store.py` |
+
+The paths in this guide use three placeholders. Substitute them before running a command or
+saving a config (a line such as `T=<train-dir>` is not valid shell as written). On the lab cluster
+they are:
+
+| Placeholder | Lab location |
+|---|---|
+| `<train-dir>` | `/hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train` |
+| `<lite-dir>` | `/hpc/projects/virtual_staining/training/dynacell_lite` |
+| `<model-dir>` | `/hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus` |
 
 **The baseline recipe (`fnet2d_vscyto2daug`):**
 - **Model and input:** FNet run in 2D, one plane per sample, 384 × 384 patches.
@@ -49,12 +59,13 @@ uv run wandb login                             # training logs to wandb project 
 ```
 
 - **Run from your own checkout.** Jobs run in the repository of the launcher script you call. If you run another user's copy, your jobs use that user's tree and environment.
-- **Write permissions.** You need write access, through `group.virtual.staining`, to:
-  - `/hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/`;
-  - `/hpc/projects/virtual_staining/training/dynacell_lite/`;
-  - `/hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/`.
+- **Write permissions.** You need write access, through the lab's shared group, to:
+  - `<train-dir>/`;
+  - `<lite-dir>/`;
+  - `<model-dir>/`.
 
-  You cannot create new top-level folders under `.../models/dynacell/`.
+  You cannot create new top-level folders in the lab's `models/dynacell/` folder, two levels above
+  `<model-dir>`.
 - **GPU work outside sbatch.** Run preprocessing, stats, predict and eval inside a GPU allocation, for example `srun -p gpu --gres=gpu:1 -c 16 --mem=128G -t 4:00:00 --pty bash`.
 
 ## 2. Add a reconstruction as a new channel
@@ -74,7 +85,7 @@ Reconstruct each train and test store you need: `train/cell.zarr`, the lite iPSC
 The 5-plane train store is cut from a full-Z store, and its statistics come from that full-Z store. So assemble the full-Z store first, compute statistics, then cut the slab. Never write into or `--overwrite` `cell_focus.zarr`, because running fits read it.
 
 ```sh
-T=/hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train
+T=<train-dir>
 # 1. Slim full-Z store: Phase3D (picks the in-focus slab), Nuclei (target), PhaseWO1 (new source)
 uv run python applications/dynacell/tools/assemble_channel_store.py \
   --base $T/cell.zarr --keep Phase3D Nuclei \
@@ -103,7 +114,7 @@ uv run python applications/dynacell/tools/extract_focus_slab_store.py \
 Predict reads only the source channel, and the eval reads only the prediction and the registered ground truth. So a test-side store needs only the new channel.
 
 ```sh
-L=/hpc/projects/virtual_staining/training/dynacell_lite
+L=<lite-dir>
 uv run python applications/dynacell/tools/assemble_channel_store.py \
   --base $L/ipsc/dataset_v4/test_cropped/cell.zarr \
   --add <waveorder_ipsc_lite_output.zarr>:Phase3D:PhaseWO1 \
@@ -135,7 +146,7 @@ benchmark:
 data:
   init_args:
     source_channel: PhaseWO1
-    data_path: /hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/cell_wo1_focus.zarr
+    data_path: <train-dir>/cell_wo1_focus.zarr
     normalizations:
       - class_path: viscy_transforms.NormalizeSampled
         init_args: {keys: [PhaseWO1], level: fov_statistics, subtrahend: mean, divisor: std}
@@ -152,7 +163,7 @@ trainer:
   logger:
     init_args:
       name: FNet2D_VSAug_iPSC_NUCL_wo1
-      save_dir: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_wo1
+      save_dir: <model-dir>/fnet2d_vscyto2daug_wo1
   callbacks:
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args: {logging_interval: step}
@@ -164,11 +175,11 @@ trainer:
         every_n_epochs: 1
         save_top_k: 4
         save_last: true
-        dirpath: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_wo1/checkpoints
+        dirpath: <model-dir>/fnet2d_vscyto2daug_wo1/checkpoints
 
 launcher:
   job_name: FNet2DVSAug_wo1
-  run_root: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_wo1
+  run_root: <model-dir>/fnet2d_vscyto2daug_wo1
 ```
 
 **Why a copy, not `--override`:**
@@ -222,14 +233,14 @@ benchmark:
 
 model:
   init_args:
-    ckpt_path: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug_wo1/checkpoints/last.ckpt
+    ckpt_path: <model-dir>/fnet2d_vscyto2daug_wo1/checkpoints/last.ckpt
 
 data:
   init_args:
-    data_path: /hpc/projects/virtual_staining/training/dynacell_lite/ipsc/dataset_v4/test_cropped/cell_wo1.zarr
+    data_path: <lite-dir>/ipsc/dataset_v4/test_cropped/cell_wo1.zarr
     source_channel: PhaseWO1
     target_channel: Nuclei
-    predict_z_planes: /hpc/projects/virtual_staining/training/dynacell_lite/focus2d_planes/nucleus/ipsc__h1.json
+    predict_z_planes: <lite-dir>/focus2d_planes/nucleus/ipsc__h1.json
     normalizations:
       - class_path: viscy_transforms.NormalizeSampled
         init_args: {keys: [PhaseWO1], level: fov_statistics, subtrahend: mean, divisor: std}
@@ -239,11 +250,11 @@ trainer:
   callbacks:
     - class_path: viscy_utils.callbacks.prediction_writer.HCSPredictionWriter
       init_args:
-        output_store: /hpc/projects/virtual_staining/training/dynacell_lite/nucleus/fnet2d_vscyto2daug_wo1/ipsc/ipsc/prediction.zarr
+        output_store: <lite-dir>/nucleus/fnet2d_vscyto2daug_wo1/ipsc/ipsc/prediction.zarr
 
 launcher:
   job_name: FNet2DVSAug_wo1_PRED_NUCL_LITE
-  run_root: /hpc/projects/virtual_staining/training/dynacell_lite/nucleus/fnet2d_vscyto2daug_wo1/ipsc/ipsc
+  run_root: <lite-dir>/nucleus/fnet2d_vscyto2daug_wo1/ipsc/ipsc
 ```
 
 **A549 lite (out of domain):** copy the config and change three things.
@@ -295,7 +306,7 @@ The fast tier computes:
 It skips the deep-feature and CP metrics. Run it inside a GPU allocation with at least 40 GB of GPU memory:
 
 ```sh
-R=/hpc/projects/virtual_staining/training/dynacell_lite
+R=<lite-dir>
 M=fnet2d_vscyto2daug_wo1
 uv run --frozen --package dynacell --extra eval --extra eval_gpu dynacell evaluate \
   target=nucleus +benchmark.dataset_ref.dataset=aics-hipsc-lite \
