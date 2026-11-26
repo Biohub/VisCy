@@ -36,8 +36,8 @@ def _parse_add(spec: str) -> tuple[Path, str, str]:
 
 def assemble(
     base: Path, keep: list[str], adds: list[tuple[Path, str, str]], output: Path, limit: int | None = None
-) -> list[str]:
-    """Write ``output`` and return the position names written.
+) -> None:
+    """Write ``output``.
 
     Raises
     ------
@@ -50,7 +50,6 @@ def assemble(
     out_channels = [*keep, *(new for _, _, new in adds)]
     if len(set(out_channels)) != len(out_channels):
         raise ValueError(f"output channel names must be unique, got {out_channels}")
-    written = []
     with ExitStack() as stack:
         src = stack.enter_context(open_ome_zarr(base, mode="r"))
         others = [stack.enter_context(open_ome_zarr(store, mode="r")) for store, _, _ in adds]
@@ -92,9 +91,7 @@ def assemble(
             pos_norm = {c: v for c, v in pos.zattrs.get("normalization", {}).items() if c in keep}
             if pos_norm:
                 out.zattrs["normalization"] = pos_norm
-            written.append(name)
             print(f"{name} {tuple(out['0'].shape)}", flush=True)
-    return written
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -96,10 +96,6 @@ def test_assemble_preserves_the_base_sharding(tmp_path: Path, shards_ratio, shar
             np.testing.assert_array_equal(np.asarray(pos["0"])[:, 0], base[name][:, 1])
 
 
-def _o(tmp_path: Path) -> Path:
-    return tmp_path / "o.zarr"
-
-
 def test_assemble_refuses_a_shape_mismatch(tmp_path: Path) -> None:
     """A 2D (single-Z) reconstruction cannot sit next to a full-Z base channel."""
     _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"])
@@ -130,10 +126,10 @@ def test_assemble_refuses_duplicate_names_and_existing_output(tmp_path: Path) ->
     adds = [(tmp_path / "wo1.zarr", "Phase3D", "Phase3D")]
     with pytest.raises(ValueError, match="unique"):
         assemble(tmp_path / "base.zarr", ["Phase3D"], adds, tmp_path / "o.zarr")
-    assemble(tmp_path / "base.zarr", [], [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")], _o(tmp_path), limit=1)
-    with open_ome_zarr(_o(tmp_path), mode="r") as plate:
+    assemble(tmp_path / "base.zarr", [], [(tmp_path / "wo1.zarr", "Phase3D", "PhaseWO1")], tmp_path / "o.zarr", limit=1)
+    with open_ome_zarr(tmp_path / "o.zarr", mode="r") as plate:
         # Nothing kept: no normalization attrs at all, so viscy preprocess starts clean.
         assert "normalization" not in plate.zattrs
         assert all("normalization" not in pos.zattrs for _, pos in plate.positions())
     with pytest.raises(FileExistsError):
-        assemble(tmp_path / "base.zarr", ["Nuclei"], [], _o(tmp_path))
+        assemble(tmp_path / "base.zarr", ["Nuclei"], [], tmp_path / "o.zarr")
