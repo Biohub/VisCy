@@ -1,0 +1,26 @@
+# FNet2D fit overlay for the 384x384-patch arms (fnet2d_bigpatch and
+# fnet2d_vscyto2daug): fnet2d_fit.yml plus the speed flags
+# (trainer.benchmark, channels_last), bf16-mixed precision and a 20k-step
+# budget. Both arms compose it so they stay paired; they differ from the
+# fnet2d baseline in precision, flags and step budget as well as the patch.
+# Precedent: fnet3d_paper_fit.yml carries the 3D speed flags.
+#
+# Built for fast iteration. Measured on an A40 (nucleus aug arm, steps 90-158):
+# 1.216 s/step without flags at 32-true, 1.162 with flags, 0.492 with flags
+# + bf16-mixed (2.47x), peak memory 27.9 -> 11.7 GB. MSE loss is immune to
+# the bf16-SSIM cancellation issue; the 3D pair (fnet3d_bigpatch /
+# fnet3d_vscyto3daug) also trains at bf16-mixed.
+base:
+  - fnet2d_fit.yml
+model:
+  init_args:
+    channels_last: true
+trainer:
+  benchmark: true
+  precision: bf16-mixed
+  # 20k steps, not fnet2d's 200k. The first 200k-step baseline fits (seed 0 and 1,
+  # 2026-11-17) reached their minimum validation loss at step 3818 and 2158-2988
+  # (about 2% of 200k) and rose afterwards (+12% by step 36k): at 384^2 x batch 48
+  # each step carries 36x the pixels of fnet2d's 64^2 patches. 20k is ~5x the best
+  # step, about 1.7 h on an A100 at the measured 0.31 s/step.
+  max_steps: 20000
