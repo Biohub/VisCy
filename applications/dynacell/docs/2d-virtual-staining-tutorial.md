@@ -48,7 +48,7 @@ uv sync --all-packages --all-extras --frozen   # needs the HPC uv cache symlink,
 uv run wandb login                             # training logs to wandb project "dynacell"
 ```
 
-- **Run from your own checkout.** Jobs run in the repository of the launcher script you call. If you run Alex's copy, your jobs use his tree and his environment.
+- **Run from your own checkout.** Jobs run in the repository of the launcher script you call. If you run another user's copy, your jobs use that user's tree and environment.
 - **Write permissions.** You need write access, through `group.virtual.staining`, to:
   - `/hpc/projects/virtual_staining/training/dynacell/ipsc/dataset_v4/train/`;
   - `/hpc/projects/virtual_staining/training/dynacell_lite/`;
@@ -193,7 +193,7 @@ uv run python applications/dynacell/tools/submit_benchmark_job.py $LEAF --resume
 - **Job resources:** 1 GPU of any type on the `gpu` partition, 32 CPUs, 128 GB, 20-day wall limit.
 - **Following the run:** progress is in wandb, project `dynacell`, group = `trainer.logger.init_args.name`.
 - **Is it done?** A fit is done when its last checkpoint reaches `max_steps` (20k). wandb's `finished` state alone also appears for killed runs.
-- **Throughput:** the resolved config runs the training job at the speeds in §0. Alex submitted the baseline this way; submitting a variant this way is **(not run)**.
+- **Throughput:** the resolved config runs the training job at the speeds in §0. The baseline fits were submitted this way; submitting a variant this way is **(not run)**.
 
 ## 4. Predict on DynaCell-lite
 
@@ -345,7 +345,7 @@ The steps above reuse the DynaCell test sets, whose plane files, lite subsets an
 
 - **Training** needs no manifest. Point a variant config's `data_path`, `source_channel` and `target_channel` at your store, re-key the three channel lists as in §3.1, and run `viscy preprocess` for both channels. A 3D store needs a 5-plane slab from `extract_focus_slab_store.py` (pass `--pixel-size`); a store that is already single-plane (Z=1) should work directly, since the 2D configs read one plane per sample (not run).
 - **Predict** on a 3D test store needs a plane file. `dynacell precompute-gt ... build.focus_planes=<file>` writes one and needs a ground-truth nucleus channel. Here it was run through a registered dataset (`+benchmark.dataset_ref...`); registering yours means a manifest under `DYNACELL_MANIFEST_ROOTS`, and passing `io.gt_path` directly instead is untested. Without a plane file, set `predict_z_planes: null` to predict every plane (slower, but the eval accepts it).
-- **Eval** on your own stores: pass `io.gt_path`, `io.gt_channel_name`, `io.pred_path`, `io.pred_channel_name`, `pixel_metrics.spacing` and `save.save_dir` instead of `+benchmark.dataset_ref...`. Two measured constraints (2026-11-16, synthetic stores; log in Alex's `experiments/2026-11-16_2d-native-z1-pixel-metrics/RESULTS.md`):
+- **Eval** on your own stores: pass `io.gt_path`, `io.gt_channel_name`, `io.pred_path`, `io.pred_channel_name`, `pixel_metrics.spacing` and `save.save_dir` instead of `+benchmark.dataset_ref...`. Two measured constraints (2026-11-16, synthetic stores):
   - single-plane (Z=1) stores must be scored with `focus2d.halfwidth=0` plus the cpdino 2D segmentation flags (`compute_instance_ap=true segmentation.backend=cpdino segmentation.dimension=2d segmentation.slice_selection=focus segmentation.focus_slab_halfwidth=0`); without focus2d the eval crashes in SSIM;
   - the eval always segments the target, and only nucleus and membrane have a 2D segmenter.
 - **For PSNR and FRC alone** on 2D arrays, `dynacell.evaluation.metrics.compute_pixel_metrics(pred, gt, spacing, fsc_kwargs={"bin_delta": 5}, ...)` returns `PSNR`, `SI_PSNR` and `FRC_Resolution` with no segmentation.
