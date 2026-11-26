@@ -2,7 +2,8 @@
 # A549 h2b DENV DynaCell-lite test set (12 FOVs x 5 timepoints), 2D focus slab only (focus2d.halfwidth=1).
 # Phase3D source, so the lite dataset_ref fills data_path and channels. The plane
 # file comes from dynacell precompute-gt build.focus_planes on the lite dataset.
-# Submit with --ckpt best: the pinned last.ckpt is not the best-by-val checkpoint.
+# Best val-loss checkpoint: epoch=22-step=3818-loss=1.219.ckpt (loss/validate=1.219),
+# baked by tools/bake_best_ckpt.py. The fit ran to step 200000; last.ckpt holds the overfit weights.
 base:
   - ../../../_internal/shared/model/predict_sets/a549_mantis_h2b_denv_lite.yml
   - ../../../_internal/shared/model/targets/nucleus.yml
@@ -23,7 +24,7 @@ benchmark:
 
 model:
   init_args:
-    ckpt_path: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug/checkpoints/last.ckpt
+    ckpt_path: /hpc/projects/comp.micro/virtual_staining/models/dynacell/ipsc/nucleus/fnet2d_vscyto2daug/checkpoints/epoch=22-step=3818-loss=1.219.ckpt
 
 data:
   init_args:
