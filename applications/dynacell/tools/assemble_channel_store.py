@@ -18,6 +18,7 @@ Example (train side, one reconstruction, renamed so it never collides with Phase
 
 import argparse
 from contextlib import ExitStack
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -61,7 +62,7 @@ def assemble(
             dst.zattrs["normalization"] = plate_norm
         keep_idx = [src.channel_names.index(c) for c in keep]
         add_idx = [other.channel_names.index(ch) for other, (_, ch, _) in zip(others, adds)]
-        for name, pos in list(src.positions())[:limit]:
+        for name, pos in islice(src.positions(), limit):
             arr = pos["0"]
             planes = [np.asarray(arr[:, i]) for i in keep_idx]
             for other, i, (store, _, _) in zip(others, add_idx, adds):
@@ -75,10 +76,17 @@ def assemble(
                 planes.append(added.astype(arr.dtype, copy=False))
             row, col, fov = name.split("/")
             out = dst.create_position(row, col, fov)
+            chunks = (1, 1, *arr.chunks[2:])
+            # Keep the base's shard shape (an unsharded base stays unsharded); it is always a whole
+            # multiple of these chunks, since chunks[:2] are 1 and the rest equal the base's.
+            shards_ratio = (
+                None if arr.shards is None else tuple(s // c for s, c in zip(arr.shards, chunks, strict=True))
+            )
             out.create_image(
                 "0",
                 np.stack(planes, axis=1),
-                chunks=(1, 1, *arr.chunks[2:]),
+                chunks=chunks,
+                shards_ratio=shards_ratio,
                 transform=[TransformationMeta(type="scale", scale=list(pos.scale))],
             )
             pos_norm = {c: v for c, v in pos.zattrs.get("normalization", {}).items() if c in keep}

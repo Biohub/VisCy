@@ -13,7 +13,17 @@ _POSITIONS = ("A/1/0", "A/1/1", "B/2/0")
 _SCALE = [1.0, 1.0, 0.29, 0.108, 0.108]
 
 
-def _store(path: Path, channels: list[str], *, shape=(2, 4, 16, 16), seed=0, positions=_POSITIONS, norm=True):
+def _store(
+    path: Path,
+    channels: list[str],
+    *,
+    shape=(2, 4, 16, 16),
+    seed=0,
+    positions=_POSITIONS,
+    norm=True,
+    chunks=None,
+    shards_ratio=None,
+):
     """Write a plate with one random (T, C, Z, Y, X) image per position; return its arrays."""
     rng = np.random.default_rng(seed)
     data = {}
@@ -24,7 +34,11 @@ def _store(path: Path, channels: list[str], *, shape=(2, 4, 16, 16), seed=0, pos
             arr = rng.random((shape[0], len(channels), *shape[1:]), dtype=np.float32)
             pos = plate.create_position(*name.split("/"))
             pos.create_image(
-                "0", arr, chunks=(1, 1, *shape[1:]), transform=[TransformationMeta(type="scale", scale=_SCALE)]
+                "0",
+                arr,
+                chunks=chunks or (1, 1, *shape[1:]),
+                shards_ratio=shards_ratio,
+                transform=[TransformationMeta(type="scale", scale=_SCALE)],
             )
             if norm:
                 pos.zattrs["normalization"] = {
@@ -66,6 +80,20 @@ def test_assemble_keeps_base_channels_and_adds_renamed_ones(tmp_path: Path) -> N
                 "Phase3D": {"fov_statistics": {"mean": 2.0, "std": 1.0}},
                 "Nuclei": {"fov_statistics": {"mean": 1.0, "std": 1.0}},
             }
+
+
+@pytest.mark.parametrize(
+    "shards_ratio, shards", [(None, None), ((2, 1, 2, 2, 2), (2, 1, 4, 16, 16))], ids=["unsharded", "sharded"]
+)
+def test_assemble_preserves_the_base_sharding(tmp_path: Path, shards_ratio, shards) -> None:
+    """A sharded base gives a sharded output with the same shard shape; an unsharded base stays unsharded."""
+    base = _store(tmp_path / "base.zarr", ["Phase3D", "Nuclei"], chunks=(1, 1, 2, 8, 8), shards_ratio=shards_ratio)
+    assemble(tmp_path / "base.zarr", ["Nuclei"], [], tmp_path / "o.zarr")
+    with open_ome_zarr(tmp_path / "o.zarr", mode="r") as plate:
+        for name, pos in plate.positions():
+            assert pos["0"].chunks == (1, 1, 2, 8, 8)
+            assert pos["0"].shards == shards
+            np.testing.assert_array_equal(np.asarray(pos["0"])[:, 0], base[name][:, 1])
 
 
 def _o(tmp_path: Path) -> Path:
