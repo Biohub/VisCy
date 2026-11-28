@@ -10,12 +10,11 @@ virus infection and through four drug treatments, on the Mantis light-sheet micr
 (every 30 minutes) and an Andor Dragonfly spinning-disk confocal (every 6 hours).
 
 The notebook streams everything from S3 with anonymous HTTP range requests. It downloads
-no store in full, needs no AWS credentials, and runs in about two minutes. It has four parts:
+no store in full, needs no AWS credentials, and runs in about two minutes. It has three parts:
 
 1. What is in the bucket: the stores and their per-field-of-view curation tables.
 2. The single-cell atlas: the DynaCLR embedding behind the interactive explorer.
 3. What the images look like: organelles across infections, and one infection in time.
-4. Open challenge: predicting the course of an infection from morphology.
 
 ## Requirements
 
